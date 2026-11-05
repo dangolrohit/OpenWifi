@@ -40,3 +40,15 @@ class CaptiveFirewallTests(unittest.TestCase):
         controller.restore_guest_firewall()
         controller.captive.check_expiries.assert_called_once()
         controller.firewall.update_guest_sessions.assert_called_once_with({})
+
+
+    def test_prelogin_dns_and_http_are_redirected_without_allowing_forwarding(self):
+        manager = FirewallManager()
+        rules = manager.build_ruleset({"captive_enabled": True})
+        for protocol in ("udp", "tcp"):
+            self.assertIn(f'ip saddr != @whitelisted ip saddr != @authenticated {protocol} dport 53 counter redirect to :53', rules)
+        self.assertIn('tcp dport 80 counter redirect to :8088', rules)
+        self.assertIn('iifname "enp1s0" counter drop', rules)
+        disabled = manager.build_ruleset({"captive_enabled": False})
+        self.assertNotIn('redirect to :53', disabled)
+        self.assertNotIn('redirect to :8088', disabled)

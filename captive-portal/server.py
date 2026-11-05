@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import urllib.request
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -42,36 +43,61 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
         if location:
             self.send_header("Location", location)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
 
     def do_GET(self):
         client_ip = self.client_address[0]
-        clean_path = self.path.split("?")[0]
-        probes = ("/generate_204", "/gen_204", "/hotspot-detect.html", "/connecttest.txt", "/ncsi.txt", "/success.txt")
+        clean_path = urlsplit(self.path).path
+        probes = {
+            "/generate_204": (204, "", "text/plain"),
+            "/gen_204": (204, "", "text/plain"),
+            "/connecttest.txt": (200, "Microsoft Connect Test", "text/plain"),
+            "/ncsi.txt": (200, "Microsoft NCSI", "text/plain"),
+            "/hotspot-detect.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>", "text/html"),
+            "/library/test/success.html": (200, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>", "text/html"),
+            "/success.txt": (200, "success\n", "text/plain"),
+        }
 
         # Captive probe handling
         if clean_path in probes:
             try:
                 # Check status via backend API
                 req = urllib.request.Request(f"{BACKEND_URL}/api/v1/guests/status", headers=client_headers(client_ip))
-                with urllib.request.urlopen(req, timeout=3) as resp:
+                with urllib.request.urlopen(req, timeout=1) as resp:
                     if resp.status == 200:
                         data = json.loads(resp.read().decode())
                         if data.get("authorized"):
-                            if "204" in clean_path:
-                                self.send_response(204)
-                                self.end_headers()
-                                return
-                            self.respond(200, "Success", "text/plain")
+                            code, body, kind = probes[clean_path]
+                            self.respond(code, body, kind)
                             return
-            except Exception:
-                pass
+            except Exception as exc:
+                if isinstance(exc, urllib.error.HTTPError):
+                    exc.close()
+                logger.warning("Probe status unavailable; showing sign-in: %s", type(exc).__name__)
 
+            logger.info("Captive probe from %s: %s -> /guest", client_ip, clean_path)
             # Unauthorized: redirect to captive portal landing page
             self.respond(302, "", "text/plain", location=f"http://{GATEWAY_IP}:{PORT}/guest")
             return
 
+        if clean_path == "/health":
+            self.respond(200, json.dumps({"status": "ok", "service": "captive-portal"}), "application/json")
+            return
+
         if clean_path in ("/", "/guest"):
+            # Normalize intercepted root-page probes to the gateway origin so
+            # portal assets/API requests do not depend on the original hostname.
+            try:
+                hostname = urlsplit("//" + self.headers.get("Host", "")).hostname
+            except ValueError:
+                hostname = None
+            if hostname not in (GATEWAY_IP, "127.0.0.1", "localhost"):
+                self.respond(302, "", "text/plain", location=f"http://{GATEWAY_IP}:{PORT}/guest")
+                return
             if TEMPLATE_PATH.exists():
                 self.respond(200, TEMPLATE_PATH.read_text(encoding="utf-8"), "text/html")
             else:
@@ -98,7 +124,7 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         client_ip = self.client_address[0]
-        clean_path = self.path.split("?")[0]
+        clean_path = urlsplit(self.path).path
 
         # Reverse proxy to backend API for guest connection
         if clean_path == "/api/v1/guests/connect":

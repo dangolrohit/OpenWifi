@@ -86,7 +86,12 @@ class FirewallManager:
         # Prerouting NAT Chain (Redirect port 80 to captive portal on 8088)
         script += "add chain inet wifirouter prerouting { type nat hook prerouting priority dstnat; policy accept; }\n"
         if captive_on:
-            script += f'add rule inet wifirouter prerouting iifname "{iface}" ip saddr != @whitelisted ip saddr != @authenticated tcp dport 80 redirect to :8088\n'
+            # Connectivity probes must resolve before their HTTP requests can be
+            # redirected. Serve pre-login standard DNS through the gateway's
+            # shared dnsmasq, including clients configured with external DNS.
+            for protocol in ("udp", "tcp"):
+                script += f'add rule inet wifirouter prerouting iifname "{iface}" ip saddr != @whitelisted ip saddr != @authenticated {protocol} dport 53 counter redirect to :53\n'
+            script += f'add rule inet wifirouter prerouting iifname "{iface}" ip saddr != @whitelisted ip saddr != @authenticated tcp dport 80 counter redirect to :8088\n'
 
         # Forward Chain (Access blocks, guest isolation, DNS-over-TLS drop, captive gate)
         script += "add chain inet wifirouter forward { type filter hook forward priority -10; policy accept; }\n"

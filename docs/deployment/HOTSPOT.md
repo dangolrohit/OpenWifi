@@ -5,7 +5,7 @@
 1. Join the secondary router's open SSID (no Wi-Fi password).
 2. Open the captive login screen. If the operating system does not open it,
    browse to `http://192.168.16.2:8088/guest` or an ordinary HTTP website.
-3. Choose **Access as a Guest** for 30 minutes at 1 Mbps, or enter a six-digit
+3. Choose **Continue as Guest** for 30 minutes at 1 Mbps, or enter a six-digit
    access code generated in **Guests**.
 4. Codes are single-use and apply their active plan's duration and speed at
    redemption. Disabled plans and reused codes are rejected.
@@ -68,7 +68,7 @@ pretending internet access succeeded.
 
 - Before confirming or entering a code: internet browsing should be blocked;
   the captive page should load.
-- Click **Access as a Guest**: verify the active session in Guests is the actual
+- Click **Continue as Guest**: verify the active session in Guests is the actual
   client's IP, lasts 30 minutes, and shows 1 Mbps. Re-clicking does not extend it.
 - Test upload and download limits. These are nftables packet-rate caps per
   direction, not a guaranteed throughput or smooth traffic shaping; short bursts
@@ -99,3 +99,50 @@ validation/redemption, disabled plans, failure rollback, signed guest identity,
 and firewall script generation. Actual Ubuntu forwarding, captive detection,
 PostgreSQL concurrent redemptions and measured radio throughput still need the
 on-device checks above.
+
+## Automatic sign-in detection
+
+The device, not the router, decides whether to open a captive browser or show a
+"Sign in to Wi-Fi" notification. The gateway redirects unauthenticated HTTP
+connectivity checks to the login page. The guest still needs to choose Continue
+as Guest or Continue with Access Code; joining Wi-Fi does not authorize access.
+
+Before login, UDP and TCP DNS on port 53 are redirected to the gateway's existing
+shared dnsmasq. This lets clients using an external DNS address resolve probe
+hostnames before internet forwarding is allowed. The gateway must have a working
+DNS listener at `192.168.16.2:53`; the redirect does not create a DNS server.
+Encrypted DNS is not decrypted or redirected. HTTP redirect counters are visible
+in the nftables prerouting chain.
+
+After updating the agent and captive container, test with a device that has no
+active session and is not whitelisted. Disconnect/reconnect Wi-Fi, or forget the
+saved network and join it again. If offered, tap the operating system's sign-in
+notification. An already authorized/whitelisted device should not be redirected.
+
+If the prompt does not appear, open this **HTTP** URL on that guest device:
+`http://www.msftconnecttest.com/connecttest.txt`. Before authorization it should
+redirect to `http://192.168.16.2:8088/guest`. Opening the portal manually proves
+reachability only, not interception of external probe requests.
+
+On Ubuntu collect read-only diagnostics:
+
+```bash
+sudo python3 scripts/diagnostics/check_captive.py
+sudo docker compose logs --tail=30 captive-portal
+```
+
+- DNS lookup failure: inspect the NetworkManager shared connection and dnsmasq.
+- DNS succeeds but HTTP redirect counters remain zero during guest requests:
+  check the agent's downstream interface and the client's gateway/DNS settings.
+- Redirect counters increase but the portal cannot be reached: check port 8088
+  listeners and other host firewall rules.
+- The guest HTTP test redirects but there is no automatic popup: the network
+  redirect works; inspect the device's sign-in notification and captive detection
+  settings. HTTPS-only browsing cannot be transparently redirected without TLS
+  errors, and the gateway does not install interception certificates.
+
+The Windows response bodies follow [Microsoft's NCSI documentation](https://learn.microsoft.com/en-us/windows-server/networking/ncsi/ncsi-frequently-asked-questions).
+DHCP option 114 is deliberately not pointed at the HTTP login page: it describes
+a captive-portal API, and [Apple's modern captive network guidance](https://developer.apple.com/news/?id=q78sq5rv)
+requires that API to use TLS. Advertising it correctly would require a reachable
+HTTPS API with a trusted certificate and a DHCP configuration update.
