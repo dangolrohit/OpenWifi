@@ -32,14 +32,43 @@ def valid_ip(value):
 def run(args, **kwargs):
     return subprocess.run(args, capture_output=True, text=True, timeout=10, **kwargs)
 
-def parse_dns_log(log_path, filter_ip=None, limit=300):
-    if not log_path.exists():
-        return []
+def get_dns_log_lines():
+    for log_path in (Path('/var/log/dnsmasq.log'), Path('/var/log/oshin-dns.log'), Path('/var/log/syslog')):
+        if log_path.exists():
+            try:
+                with log_path.open('r', encoding='utf-8', errors='replace') as f:
+                    lines = [l for l in f.readlines() if 'query[' in l]
+                    if lines:
+                        return lines[-600:]
+            except Exception:
+                pass
+
     try:
-        with log_path.open('r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
+        res = subprocess.run(
+            ['/usr/bin/journalctl', '-u', 'NetworkManager', '-n', '500', '--no-pager'],
+            capture_output=True, text=True, timeout=5
+        )
+        if res.returncode == 0 and 'query[' in res.stdout:
+            return [l for l in res.stdout.splitlines() if 'query[' in l]
     except Exception:
-        return []
+        pass
+
+    return []
+
+def parse_dns_log(log_path, filter_ip=None, limit=300):
+    lines = []
+    if isinstance(log_path, (str, Path)):
+        p = Path(log_path)
+        if p.exists():
+            try:
+                with p.open('r', encoding='utf-8', errors='replace') as f:
+                    lines = [l for l in f.readlines() if 'query[' in l]
+            except Exception:
+                pass
+        if not lines:
+            lines = get_dns_log_lines()
+    elif isinstance(log_path, (list, tuple)):
+        lines = log_path
 
     results = []
     for line in reversed(lines):
@@ -145,6 +174,9 @@ def apply_rules(blocked, metadata=None):
     script += 'add chain inet oshin_dashboard forward { type filter hook forward priority -10; policy accept; }\n'
     script += 'add rule inet oshin_dashboard forward iifname "enp1s0" ip saddr @blocked counter drop\n'
     script += 'add rule inet oshin_dashboard forward oifname "enp1s0" ip daddr @blocked counter drop\n'
+
+    # Drop DNS-over-TLS (port 853) so client devices fallback to standard gateway DNS on port 53
+    script += 'add rule inet oshin_dashboard forward iifname "enp1s0" tcp dport 853 counter drop\n'
 
     # Customer client-to-client isolation (customers cannot access other devices on LAN)
     script += 'add rule inet oshin_dashboard forward iifname "enp1s0" oifname "enp1s0" ip saddr @customers counter drop\n'

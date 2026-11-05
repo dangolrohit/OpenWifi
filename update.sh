@@ -30,12 +30,15 @@ systemctl stop oshin-dashboard
 install -d -m 755 /etc/NetworkManager/dnsmasq-shared.d
 cat > /etc/NetworkManager/dnsmasq-shared.d/01-activity-log.conf <<'CONF'
 log-queries
-log-facility=/var/log/oshin-dns.log
+log-facility=/var/log/dnsmasq.log
 CONF
-touch /var/log/oshin-dns.log
-chmod 644 /var/log/oshin-dns.log
+touch /var/log/dnsmasq.log /var/log/oshin-dns.log
+chmod 666 /var/log/dnsmasq.log /var/log/oshin-dns.log
+
+# Kill stale dnsmasq and restart NetworkManager so logging activates immediately
+pkill -f 'dnsmasq.*dnsmasq-shared' 2>/dev/null || true
 if systemctl is-active --quiet NetworkManager; then
-  systemctl reload NetworkManager || true
+  systemctl restart NetworkManager || true
 fi
 
 install -m 755 helper.py /usr/local/sbin/oshin-fw
