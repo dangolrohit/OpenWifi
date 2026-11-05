@@ -8,7 +8,7 @@ from ..core.config import settings
 logger = logging.getLogger("wifirouter.agent_client")
 
 class AgentUnavailableError(RuntimeError):
-    """The host agent could not supply real Wi-Fi data."""
+    """The host agent could not supply requested network data."""
 
 
 class NetworkAgentClient:
@@ -42,8 +42,8 @@ class NetworkAgentClient:
             "Content-Type": "application/json"
         }
 
-        wifi_request = endpoint.rstrip("/") in ("/wifi/status", "/wifi/scan")
-        timeout = 45.0 if endpoint.rstrip("/") == "/wifi/scan" else 15.0 if wifi_request else 5.0
+        host_data_request = endpoint.rstrip("/") in ("/wifi/status", "/wifi/scan", "/dns/device-activity")
+        timeout = 45.0 if endpoint.rstrip("/") == "/wifi/scan" else 15.0 if host_data_request else 5.0
         failure = "Ubuntu network agent is unavailable. Check wifirouter-agent.service and the agent URL/secret."
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -56,7 +56,7 @@ class NetworkAgentClient:
                     return resp.json()
                 else:
                     logger.warning(f"Agent daemon HTTP {resp.status_code} ({url}): {resp.text}")
-                    if wifi_request:
+                    if host_data_request:
                         try:
                             failure = resp.json().get("error") or failure
                         except ValueError:
@@ -64,8 +64,8 @@ class NetworkAgentClient:
         except Exception as exc:
             logger.warning(f"HTTP request to agent daemon ({url}) failed: {exc}")
 
-        # Wi-Fi must come from the host daemon, never from a container or fake AP list.
-        if wifi_request and os.environ.get("WIFIROUTER_SIMULATE", "").lower() not in ("1", "true", "yes"):
+        # Host Wi-Fi and device activity must not be replaced with simulated data.
+        if host_data_request and os.environ.get("WIFIROUTER_SIMULATE", "").lower() not in ("1", "true", "yes"):
             raise AgentUnavailableError(failure)
 
         # Fallback to in-process controller if available
@@ -107,6 +107,8 @@ class NetworkAgentClient:
                 return ctrl.bandwidth.get_realtime_metrics()
             elif clean == "/firewall":
                 return ctrl.firewall.get_status()
+            elif clean == "/dns/device-activity":
+                return ctrl.dns.get_device_activity(params["client"], params.get("page", 1))
             elif clean == "/dns/activity":
                 client_ip = params.get("client") if params else None
                 return {"queries": ctrl.dns.get_recent_queries(client_ip)}
@@ -179,6 +181,9 @@ class NetworkAgentClient:
         params = {"client": client_ip, "limit": limit} if client_ip else {"limit": limit}
         res = await self._request("GET", "/dns/activity", params=params)
         return res.get("queries", [])
+
+    async def get_device_activity(self, client_ip: str, page: int = 1) -> Dict[str, Any]:
+        return await self._request("GET", "/dns/device-activity", params={"client": client_ip, "page": page})
 
     async def clear_dns_activity(self) -> Dict[str, Any]:
         return await self._request("POST", "/dns/clear")

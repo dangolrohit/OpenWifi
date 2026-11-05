@@ -92,3 +92,24 @@ host agent.
 
 The scan command and escaped-field parsing follow the
 [NetworkManager nmcli reference](https://networkmanager.dev/docs/api/latest/nmcli).
+
+## 6. Device activity popup
+
+Connected Devices > Actions > View opens the selected device's DNS activity.
+Each row is one recorded lookup (including repeated lookups), newest first, with
+20 records per page and Previous/Next controls. Refresh returns to page one.
+The popup uses an authenticated `/api/v1/logs/dns/device-activity?client=IP&page=1`
+endpoint. Update both the host agent and backend when deploying this feature.
+
+Records are matched by IP, not permanent hardware identity. IP reassignment can
+therefore include another device's prior activity. These are domain lookups,
+including background app traffic, not proof of a person visiting a web page.
+HTTPS URL paths, cached requests, encrypted DNS, and VPN activity are not exposed
+by these DNS logs. The view reads the first retained configured log containing
+that device's queries, falling back to the NetworkManager journal; rotated or
+removed logs are not included. New requests or log rotation can change page
+boundaries while navigating. No new traffic interception is enabled.
+
+If the list is empty, verify dnsmasq query logging is enabled on Ubuntu and that
+the client uses the gateway's DNS. Agent failures appear as errors, not fabricated
+activity. Explicit development simulation is labelled in the popup.

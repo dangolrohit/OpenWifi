@@ -86,6 +86,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self.respond_json(200, ctrl.bandwidth.get_realtime_metrics(iface))
             elif clean_path == "/firewall":
                 self.respond_json(200, ctrl.firewall.get_status())
+            elif clean_path == "/dns/device-activity":
+                self.respond_json(200, ctrl.dns.get_device_activity(
+                    qs.get("client", [""])[0], int(qs.get("page", ["1"])[0])))
             elif clean_path == "/dns/activity":
                 client = qs.get("client", [None])[0]
                 limit = int(qs.get("limit", [200])[0])

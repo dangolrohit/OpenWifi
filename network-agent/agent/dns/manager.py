@@ -1,4 +1,6 @@
 """DNS activity monitoring and query log parsing module."""
+from collections import deque
+from ipaddress import IPv4Address
 import logging
 import os
 import re
@@ -94,6 +96,57 @@ class DnsActivityManager:
                 break
 
         return results
+
+    def get_device_activity(self, client_ip: str, page: int = 1) -> Dict[str, Any]:
+        """Page individual lookups from the retained active log, newest first."""
+        client_ip = str(IPv4Address(client_ip))
+        if not 1 <= page <= 100000:
+            raise ValueError("Page must be between 1 and 100000")
+        page_size = 20
+        offset = (page - 1) * page_size
+
+        def result(rows, total, available):
+            return {"queries": rows, "total": total, "page": page,
+                    "page_size": page_size, "has_more": offset + page_size < total,
+                    "log_available": available, "simulated": self.simulated}
+
+        if self.simulated:
+            rows = self.get_recent_queries(client_ip)
+            return result(rows[offset:offset + page_size], len(rows), True)
+
+        def collect(lines):
+            # Do not truncate globally before filtering: quiet devices can have
+            # requests older than the latest 800 lookups from busy devices.
+            recent = deque(maxlen=offset + page_size)
+            total = 0
+            for line in lines:
+                match = QUERY_RE.search(line)
+                if not match or match.group("client") != client_ip:
+                    continue
+                total += 1
+                recent.append({"timestamp": match.group("timestamp") or "Recent",
+                               "client": client_ip, "domain": match.group("domain"),
+                               "type": match.group("type"), "simulated": False})
+            rows = list(reversed(recent))
+            return result(rows[offset:offset + page_size], total, True)
+
+        for path in LOG_PATHS:
+            if path.exists():
+                with path.open("r", encoding="utf-8", errors="replace") as stream:
+                    data = collect(stream)
+                if data["total"]:
+                    return data
+        # Journal fallback is limited to retained NetworkManager journal entries.
+        proc = subprocess.run(
+            ["/usr/bin/journalctl", "-u", "NetworkManager", "--no-pager", "-o", "short-iso"],
+            capture_output=True, text=True, timeout=10)
+        if proc.returncode:
+            if any(path.exists() for path in LOG_PATHS):
+                return result([], 0, True)
+            raise RuntimeError("DNS logs are unavailable. Check dnsmasq query logging on Ubuntu.")
+        data = collect(proc.stdout.splitlines())
+        data["log_available"] = any(path.exists() for path in LOG_PATHS) or bool(data["total"])
+        return data
 
     def clear_logs(self) -> Dict[str, Any]:
         """Truncate active query log file."""

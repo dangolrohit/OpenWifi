@@ -135,6 +135,16 @@ export interface AuditLogItem {
   recorded_at: string;
 }
 
+export interface DeviceActivityPage {
+  queries: DnsQuery[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  log_available: boolean;
+  simulated: boolean;
+}
+
 export interface DnsQuery {
   timestamp: string;
   client: string;

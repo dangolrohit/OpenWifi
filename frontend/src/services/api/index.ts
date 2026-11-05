@@ -2,7 +2,7 @@ import { apiClient, setCsrfToken } from './client';
 import {
   User, Device, HotspotPlan, Voucher, GuestSession,
   BandwidthTelemetry, WifiStatus, WifiNetwork, SystemHealth,
-  AuditLogItem, DnsQuery, NetworkInterface, NetworkRoute
+  AuditLogItem, DnsQuery, DeviceActivityPage, NetworkInterface, NetworkRoute
 } from '@/types';
 
 export const api = {
@@ -110,6 +110,8 @@ export const api = {
       apiClient<AuditLogItem[]>(`/api/v1/logs/audit?limit=${limit}`),
     getDnsActivity: (client?: string) =>
       apiClient<{ queries: DnsQuery[] }>(`/api/v1/logs/dns${client ? `?client=${client}` : ''}`),
+    getDeviceActivity: (client: string, page: number = 1) =>
+      apiClient<DeviceActivityPage>(`/api/v1/logs/dns/device-activity?client=${encodeURIComponent(client)}&page=${page}`),
     clearDnsActivity: () =>
       apiClient<{ ok: boolean }>('/api/v1/logs/dns/clear', { method: 'POST' }),
   },

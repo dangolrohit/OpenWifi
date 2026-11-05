@@ -9,6 +9,7 @@ import {
   Clock,
   Gauge,
   Edit2,
+  Eye,
   CheckCircle,
 } from 'lucide-react';
 import { Device } from '@/types';
@@ -16,12 +17,14 @@ import { api } from '@/services/api';
 import { Badge } from '@/elements/badges/Badge';
 import { Button } from '@/elements/buttons/Button';
 import { Modal } from '@/components/common/Modal';
+import { DeviceActivityModal } from './DeviceActivityModal';
 
 export const DevicesPage: React.FC = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [viewingDevice, setViewingDevice] = useState<Device | null>(null);
 
   const { data: devices = [], isLoading } = useQuery({
     queryKey: ['devices'],
@@ -167,6 +170,9 @@ export const DevicesPage: React.FC = () => {
                     )}
                   </td>
                   <td className="px-6 py-4 text-right space-x-2">
+                    <Button variant="outline" size="sm" onClick={() => setViewingDevice(d)} aria-label={`View activity for ${d.nickname || d.hostname || d.ip}`}>
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => setEditingDevice(d)}>
                       <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit
                     </Button>
@@ -191,6 +197,10 @@ export const DevicesPage: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {viewingDevice && (
+        <DeviceActivityModal key={viewingDevice.ip} device={viewingDevice} onClose={() => setViewingDevice(null)} />
+      )}
 
       {/* Edit Device Modal */}
       {editingDevice && (
