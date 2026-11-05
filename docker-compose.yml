@@ -30,6 +30,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wifirouter}:${POSTGRES_PASSWORD:-wifirouter_secure_pg_pass_2026}@postgres:5432/${POSTGRES_DB:-wifirouter}
+      WIFIROUTER_CAPTIVE_SECRET: ${WIFIROUTER_SECRET_KEY:-wifirouter-super-secret-jwt-session-key-change-in-production}
       WIFIROUTER_SECRET_KEY: ${WIFIROUTER_SECRET_KEY:-wifirouter-super-secret-jwt-session-key-change-in-production}
       WIFIROUTER_AGENT_URL: ${WIFIROUTER_AGENT_URL:-http://host.docker.internal:8091}
       WIFIROUTER_AGENT_SECRET: ${WIFIROUTER_AGENT_SECRET:-wifirouter-dev-insecure-agent-secret-key-32b}
@@ -50,18 +51,16 @@ services:
       context: .
       dockerfile: Dockerfile.captive
     container_name: wifirouter-captive
+    network_mode: host
     restart: always
     environment:
       WIFIROUTER_CAPTIVE_HOST: 0.0.0.0
       WIFIROUTER_CAPTIVE_PORT: 8088
-      WIFIROUTER_BACKEND_URL: http://backend:8090
+      WIFIROUTER_BACKEND_URL: http://127.0.0.1:8090
+      WIFIROUTER_CAPTIVE_SECRET: ${WIFIROUTER_SECRET_KEY:-wifirouter-super-secret-jwt-session-key-change-in-production}
       WIFIROUTER_GATEWAY_IP: 192.168.16.2
-    ports:
-      - "8088:8088"
     depends_on:
       - backend
-    networks:
-      - wifirouter-net
 
 volumes:
   postgres_data:

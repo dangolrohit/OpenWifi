@@ -1,6 +1,7 @@
 """nftables firewall management for device filtering, customer isolation, and captive enforcement."""
 import json
 import logging
+import math
 import os
 import subprocess
 import time
@@ -37,7 +38,7 @@ class FirewallManager:
             "captive_enabled": True,
             "blocked": [],
             "customers": [],
-            "whitelisted": ["192.168.16.101"],
+            "whitelisted": [],
             "authenticated": [],
             "speed_limits": {}
         }
@@ -60,10 +61,14 @@ class FirewallManager:
         customers = sorted(list(set(state.get("customers", []))))
         whitelisted = sorted(list(set(state.get("whitelisted", []))))
         authenticated = sorted(list(set(state.get("authenticated", []))))
-        speed_limits = state.get("speed_limits", {})
+        speed_limits = {**state.get("speed_limits", {}), **state.get("guest_speed_limits", {})}
+        expiries = state.get("guest_expiries", {})
+        authenticated = [ip for ip in authenticated if expiries.get(ip, 0) > time.time()]
 
         script = ""
-        # Clean both wifirouter table and legacy oshin_dashboard table if present
+        # Replace only the dedicated WiFiRouter table.
+        # add is idempotent; ensure the first install can also run this transaction.
+        script += "add table inet wifirouter\n"
         script += "delete table inet wifirouter\n"
         script += "add table inet wifirouter\n"
 
@@ -71,7 +76,7 @@ class FirewallManager:
         script += "add set inet wifirouter blocked { type ipv4_addr; }\n"
         script += "add set inet wifirouter customers { type ipv4_addr; }\n"
         script += "add set inet wifirouter whitelisted { type ipv4_addr; }\n"
-        script += "add set inet wifirouter authenticated { type ipv4_addr; }\n"
+        script += "add set inet wifirouter authenticated { type ipv4_addr; flags timeout; }\n"
 
         # Input Chain
         script += "add chain inet wifirouter input { type filter hook input priority -10; policy accept; }\n"
@@ -95,15 +100,21 @@ class FirewallManager:
         script += f'add rule inet wifirouter forward iifname "{iface}" oifname "{iface}" ip saddr @customers counter drop\n'
         script += f'add rule inet wifirouter forward iifname "{iface}" oifname "{iface}" ip daddr @customers counter drop\n'
 
+        # Docker-published admin UI traverses FORWARD, unlike the host portal.
+        # Keep management reachable for non-customer devices; app login still applies.
+        script += f'add rule inet wifirouter forward iifname "{iface}" ip saddr @customers ct status dnat tcp dport 8090 drop\n'
+        script += f'add rule inet wifirouter forward iifname "{iface}" ct status dnat tcp dport 8090 accept\n'
+        script += f'add rule inet wifirouter forward oifname "{iface}" ct status dnat tcp sport 8090 accept\n'
+
         # Speed limits (rate limiting) per IP
         for ip, mbps in sorted(speed_limits.items()):
             try:
                 vip = validate_ipv4(ip)
-                rate_kb = int(mbps * 125)  # 1 Mbps = 125 KB/s
-                if rate_kb > 0:
-                    burst = max(100, int(rate_kb * 0.2))
-                    script += f'add rule inet wifirouter forward iifname "{iface}" ip saddr {vip} limit rate over {rate_kb} kbytes/second burst {burst} kbytes counter drop\n'
-                    script += f'add rule inet wifirouter forward oifname "{iface}" ip daddr {vip} limit rate over {rate_kb} kbytes/second burst {burst} kbytes counter drop\n'
+                rate_bytes = int(mbps * 125000)  # decimal Mbps -> bytes per second
+                if rate_bytes > 0:
+                    burst = max(100, int(rate_bytes * 0.2))
+                    script += f'add rule inet wifirouter forward iifname "{iface}" ip saddr {vip} limit rate over {rate_bytes} bytes/second burst {burst} bytes counter drop\n'
+                    script += f'add rule inet wifirouter forward oifname "{iface}" ip daddr {vip} limit rate over {rate_bytes} bytes/second burst {burst} bytes counter drop\n'
             except Exception:
                 continue
 
@@ -112,6 +123,10 @@ class FirewallManager:
             script += f'add rule inet wifirouter forward iifname "{iface}" ip saddr @whitelisted accept\n'
             script += f'add rule inet wifirouter forward iifname "{iface}" ip saddr @authenticated accept\n'
             script += f'add rule inet wifirouter forward iifname "{iface}" counter drop\n'
+            # Stop existing downloads as well as new outgoing connections at expiry.
+            script += f'add rule inet wifirouter forward oifname "{iface}" ip daddr @whitelisted accept\n'
+            script += f'add rule inet wifirouter forward oifname "{iface}" ip daddr @authenticated accept\n'
+            script += f'add rule inet wifirouter forward oifname "{iface}" counter drop\n'
 
         # Populate Sets
         if blocked:
@@ -121,7 +136,8 @@ class FirewallManager:
         if whitelisted:
             script += "add element inet wifirouter whitelisted { " + ", ".join(whitelisted) + " }\n"
         if authenticated:
-            script += "add element inet wifirouter authenticated { " + ", ".join(authenticated) + " }\n"
+            elements = [f"{validate_ipv4(ip)} timeout {max(1, math.ceil(expiries[ip] - time.time()))}s" for ip in authenticated]
+            script += "add element inet wifirouter authenticated { " + ", ".join(elements) + " }\n"
 
         return script
 
@@ -219,11 +235,12 @@ class FirewallManager:
         self.apply_ruleset(state)
         return {"ok": True, "ip": vip, "speed_limit_mbps": limit_mbps, "simulated": False}
 
-    def update_guest_sessions(self, active_ips: List[str]) -> None:
-        """Update authenticated guest IP elements."""
+    def update_guest_sessions(self, sessions: Dict[str, Dict[str, Any]]) -> None:
+        """Apply guest membership, expiry, and rates in one firewall transaction."""
         if self.simulated:
             return
         state = self.load_state()
-        state["authenticated"] = sorted(list(set(active_ips)))
+        state["authenticated"] = sorted(sessions)
+        state["guest_expiries"] = {ip: row["expires_at"] for ip, row in sessions.items()}
+        state["guest_speed_limits"] = {ip: row.get("speed_limit", 0) for ip, row in sessions.items()}
         self.apply_ruleset(state)
-

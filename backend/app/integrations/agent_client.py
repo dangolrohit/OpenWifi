@@ -3,12 +3,18 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 import httpx
+from fastapi import HTTPException
 from ..core.config import settings
 
 logger = logging.getLogger("wifirouter.agent_client")
 
-class AgentUnavailableError(RuntimeError):
-    """The host agent could not supply requested network data."""
+class AgentUnavailableError(HTTPException):
+    """The host agent could not complete the operation."""
+    def __init__(self, detail: str):
+        super().__init__(status_code=503, detail=detail)
+
+    def __str__(self):
+        return str(self.detail)
 
 
 class NetworkAgentClient:
@@ -42,7 +48,7 @@ class NetworkAgentClient:
             "Content-Type": "application/json"
         }
 
-        host_data_request = endpoint.rstrip("/") in ("/wifi/status", "/wifi/scan", "/dns/device-activity")
+        host_data_request = endpoint.rstrip("/") in ("/wifi/status", "/wifi/scan", "/dns/device-activity", "/captive/authorize", "/captive/revoke")
         timeout = 45.0 if endpoint.rstrip("/") == "/wifi/scan" else 15.0 if host_data_request else 5.0
         failure = "Ubuntu network agent is unavailable. Check wifirouter-agent.service and the agent URL/secret."
         try:

@@ -1,6 +1,7 @@
 """Unified controller orchestrating all network subsystem managers."""
 import logging
 import time
+import threading
 from typing import Any, Dict, List, Optional
 from .interfaces.manager import InterfaceManager
 from .routing.manager import RoutingManager
@@ -19,6 +20,7 @@ class AgentController:
     """Central coordinator for host network operations, policy enforcement, and telemetry."""
 
     def __init__(self):
+        self.guest_lock = threading.RLock()
         self.mock = MockNetworkProvider()
         self.rollback_mgr = RollbackManager()
         self.interfaces = InterfaceManager(self.mock)
@@ -49,11 +51,39 @@ class AgentController:
             "timestamp": time.time()
         }
 
-    def sync_guest_expiries(self) -> List[str]:
-        """Periodic maintenance task: prune expired guests and refresh firewall set."""
-        expired = self.captive.check_expiries()
-        if expired:
-            active_sessions = self.captive.get_active_sessions()
-            self.firewall.update_guest_sessions(list(active_sessions.keys()))
-        return expired
+    def restore_guest_firewall(self):
+        with self.guest_lock:
+            self.captive.check_expiries()
+            self.firewall.update_guest_sessions(self.captive.get_active_sessions())
 
+    def authorize_guest(self, ip, plan_id, duration, speed):
+        with self.guest_lock:
+            previous = self.captive.get_active_sessions().copy()
+            try:
+                result = self.captive.authorize_client(ip, plan_id, duration, speed)
+                self.firewall.update_guest_sessions(self.captive.get_active_sessions())
+                return result
+            except Exception:
+                if not self.captive.simulated:
+                    self.captive.save_sessions(previous)
+                raise
+
+    def revoke_guest(self, ip):
+        with self.guest_lock:
+            previous = self.captive.get_active_sessions().copy()
+            try:
+                result = self.captive.revoke_client(ip)
+                self.firewall.update_guest_sessions(self.captive.get_active_sessions())
+                return result
+            except Exception:
+                if not self.captive.simulated:
+                    self.captive.save_sessions(previous)
+                raise
+
+    def sync_guest_expiries(self) -> List[str]:
+        """Prune persisted sessions; kernel set timeouts enforce expiry independently."""
+        with self.guest_lock:
+            expired = self.captive.check_expiries()
+            if expired:
+                self.firewall.update_guest_sessions(self.captive.get_active_sessions())
+            return expired

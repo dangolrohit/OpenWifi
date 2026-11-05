@@ -25,7 +25,7 @@ Client Devices (Smartphones, Laptops, IoT)
   - Never flushes unrelated rules; seamlessly coexists with Docker, Coolify, Tailscale, and Cloudflare Tunnel.
 - **Open Wi-Fi Captive Portal**:
   - Intercepts OS probe requests on port 80 and redirects to captive portal on port 8088.
-  - **Starter Plan**: 1-click "Yes, I Agree & Connect" button granting 30 minutes of internet access at 2 Mbps speed limit.
+  - **Starter Plan**: 1-click "Access as a Guest" button granting 30 minutes of internet access at 1 Mbps speed limit.
   - **Tiered Hotspot Plans**: 4 customizable voucher/account plans (Standard 2-Hour, Half-Day Pass, Full-Day Pass, VIP Premium).
   - Real-time countdown timer, 1-click session extension (+30m), and immediate revocation.
 - **Customer Isolation & Admin Lockdown**:
@@ -111,3 +111,5 @@ If you ever need to reset all WiFiRouter firewall and traffic shaping rules to b
 ```bash
 sudo bash scripts/recovery/rollback.sh
 ```
+
+For open Wi-Fi, free guest access, and voucher deployment, see [Hotspot setup](docs/deployment/HOTSPOT.md).

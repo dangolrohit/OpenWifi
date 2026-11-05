@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     AGENT_SECRET: str = os.environ.get("WIFIROUTER_AGENT_SECRET", "wifirouter-dev-insecure-agent-secret-key-32b")
     AGENT_BASE_URL: str = os.environ.get("WIFIROUTER_AGENT_URL", "http://127.0.0.1:8091")
     
+    CAPTIVE_PROXY_SECRET: str = os.environ.get("WIFIROUTER_CAPTIVE_SECRET", "")
+
     # Database URL: default to SQLite for instant local dev & tests; production uses PostgreSQL
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./wifirouter.db")
     

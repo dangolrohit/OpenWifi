@@ -223,7 +223,7 @@ export const GuestsPage: React.FC = () => {
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm"
               >
                 {plans
-                  .filter((p) => p.plan_id !== 'starter')
+                  .filter((p) => p.type === 'voucher' && p.is_active)
                   .map((p) => (
                     <option key={p.plan_id} value={p.plan_id}>
                       {p.name} ({p.duration_minutes}m, {p.speed_limit_mbps} Mbps)
@@ -238,6 +238,10 @@ export const GuestsPage: React.FC = () => {
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                minLength={6}
+                maxLength={6}
                 placeholder="Leave blank for random 6-digit PIN"
                 value={customCode}
                 onChange={(e) => setCustomCode(e.target.value)}
@@ -245,6 +249,7 @@ export const GuestsPage: React.FC = () => {
               />
             </div>
 
+            {createVoucherMutation.error && <p role="alert" className="text-sm text-red-600">{createVoucherMutation.error.message}</p>}
             <Button type="submit" isLoading={createVoucherMutation.isPending} className="w-full">
               <Plus className="w-4 h-4 mr-2" /> Generate Voucher PIN
             </Button>

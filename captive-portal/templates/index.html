@@ -54,10 +54,10 @@
                 <h2>Starter Plan (Free)</h2>
                 <div class="plan-meta">
                     <span class="meta-pill">⏱ 30 Minutes</span>
-                    <span class="meta-pill">⚡ 2 Mbps Limit</span>
+                    <span class="meta-pill">⚡ 1 Mbps Limit</span>
                 </div>
-                <p>Free light web access. Tap below to agree to fair network usage and get online instantly.</p>
-                <button id="starter-btn">Yes, I Agree & Connect</button>
+                <p>Free light web access. Tap below to agree to fair network usage and get 30 minutes online at 1 Mbps. After your free session ends, enter an access code to continue.</p>
+                <button id="starter-btn">Access as a Guest</button>
             </div>
 
             <!-- Access Voucher Card -->
@@ -66,7 +66,7 @@
                 <p>Enter the 6-digit access code provided by the administrator for extended high-speed access.</p>
                 <form id="voucher-form">
                     <div class="input-group">
-                        <input type="text" id="voucher-code" maxlength="12" placeholder="000000" autocomplete="off" required>
+                        <input type="text" id="voucher-code" maxlength="6" minlength="6" inputmode="numeric" pattern="[0-9]{6}" placeholder="000000" autocomplete="off" required>
                         <button type="submit" id="voucher-btn" style="width: auto; padding: 0 20px;">Redeem</button>
                     </div>
                 </form>
@@ -92,6 +92,10 @@
             try {
                 const res = await fetch('/api/v1/guests/status');
                 const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Unable to check access');
+                const starter = data.plans?.find(plan => plan.plan_id === 'starter');
+                const starterCard = document.getElementById('starter-card');
+                if (starterCard) starterCard.hidden = !starter;
                 if (data.authorized && data.session) {
                     renderConnected(data.session);
                 }
@@ -101,6 +105,7 @@
         }
 
         function renderConnected(session) {
+            clearInterval(countdownTimer);
             const content = document.getElementById('portal-content');
             const expiresAt = new Date(session.expires_at).getTime();
             
@@ -147,9 +152,7 @@
                 const d = await res.json();
                 if (!res.ok) throw new Error(d.detail || d.error || 'Connection failed');
                 showMessage('Internet access granted! Activating session…');
-                setTimeout(() => {
-                    checkStatus();
-                }, 1000);
+                renderConnected(d.session);
             } catch (err) {
                 showMessage(err.message, true);
                 if (btn) btn.disabled = false;

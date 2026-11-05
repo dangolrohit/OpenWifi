@@ -1,4 +1,6 @@
 """Hotspot plan management, voucher lifecycle, and guest session tracking."""
+import re
+from ipaddress import IPv4Address, IPv4Network
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from sqlalchemy import select, update
@@ -15,7 +17,7 @@ DEFAULT_PLANS = [
         "name": "Starter Plan (Free)",
         "type": "click",
         "duration_minutes": 30,
-        "speed_limit_mbps": 2,
+        "speed_limit_mbps": 1,
         "is_active": True,
         "description": "Free 30 minutes light web access with agreement"
     },
@@ -75,6 +77,13 @@ class GuestService:
             res = await db.execute(stmt)
             plans = list(res.scalars().all())
 
+        # The free tier is a fixed product rule, including existing installations.
+        starter = next((p for p in plans if p.plan_id == "starter"), None)
+        if starter and (starter.duration_minutes != 30 or starter.speed_limit_mbps != 1 or starter.type != "click"):
+            starter.duration_minutes = 30
+            starter.speed_limit_mbps = 1
+            starter.type = "click"
+            await db.commit()
         return plans
 
     @staticmethod
@@ -89,6 +98,10 @@ class GuestService:
             existing = res.scalar_one_or_none()
 
             if existing:
+                if "duration_minutes" in p_data and not 1 <= int(p_data["duration_minutes"]) <= 43200:
+                    raise ValidationError("Plan duration must be 1 to 43200 minutes")
+                if "speed_limit_mbps" in p_data and not 1 <= int(p_data["speed_limit_mbps"]) <= 10000:
+                    raise ValidationError("Plan speed must be 1 to 10000 Mbps")
                 if "name" in p_data: existing.name = p_data["name"]
                 if "duration_minutes" in p_data: existing.duration_minutes = int(p_data["duration_minutes"])
                 if "speed_limit_mbps" in p_data: existing.speed_limit_mbps = int(p_data["speed_limit_mbps"])
@@ -108,7 +121,13 @@ class GuestService:
     @staticmethod
     async def create_voucher(db: AsyncSession, plan_id: str, custom_code: Optional[str] = None, actor: str = "admin") -> Voucher:
         """Generate a new voucher PIN."""
+        plans = {p.plan_id: p for p in await GuestService.get_plans(db)}
+        plan = plans.get(plan_id)
+        if not plan or not plan.is_active or plan.type != "voucher":
+            raise ValidationError("Choose an active voucher plan")
         code = custom_code.strip() if custom_code else generate_voucher_code(6)
+        if not re.fullmatch(r"[0-9]{6}", code):
+            raise ValidationError("Access code must contain exactly six digits")
 
         stmt = select(Voucher).where(Voucher.code == code)
         res = await db.execute(stmt)
@@ -162,12 +181,21 @@ class GuestService:
     @staticmethod
     async def authorize_guest(db: AsyncSession, client_ip: str, plan_id: Optional[str] = None, voucher_code: Optional[str] = None) -> GuestSession:
         """Authorize a guest via Starter click agreement or voucher redemption."""
+        try:
+            address = IPv4Address(client_ip)
+            if address not in IPv4Network("192.168.16.0/24") or address.packed[-1] in (0, 1, 2, 255):
+                raise ValueError()
+        except ValueError:
+            raise ValidationError("Connect to the guest Wi-Fi network before requesting access")
         plans = {p.plan_id: p for p in await GuestService.get_plans(db)}
         chosen_plan = None
+        voucher = None
 
         if voucher_code:
             v_code = voucher_code.strip()
-            stmt = select(Voucher).where(Voucher.code == v_code)
+            if not re.fullmatch(r"[0-9]{6}", v_code):
+                raise ValidationError("Access code must contain exactly six digits")
+            stmt = select(Voucher).where(Voucher.code == v_code).with_for_update()
             res = await db.execute(stmt)
             voucher = res.scalar_one_or_none()
 
@@ -175,19 +203,31 @@ class GuestService:
                 raise ValidationError("Invalid or already used voucher code")
 
             chosen_plan = plans.get(voucher.plan_id)
-            if not chosen_plan:
+            if not chosen_plan or not chosen_plan.is_active:
                 raise ValidationError("Voucher's associated plan is not available")
 
-            # Mark voucher used
-            voucher.is_used = True
-            voucher.used_by_ip = client_ip
-            voucher.used_at = datetime.now(timezone.utc)
+            # Claim atomically so simultaneous redemptions cannot both succeed.
+            claimed = await db.execute(update(Voucher).where(
+                Voucher.id == voucher.id, Voucher.is_used == False
+            ).values(is_used=True, used_by_ip=client_ip, used_at=datetime.now(timezone.utc)))
+            if claimed.rowcount != 1:
+                raise ValidationError("Invalid or already used voucher code")
         elif plan_id:
             chosen_plan = plans.get(plan_id)
             if not chosen_plan or not chosen_plan.is_active:
                 raise ValidationError("Selected plan is not available")
-            if chosen_plan.type == "voucher":
+            if chosen_plan.plan_id != "starter" or chosen_plan.type != "click":
                 raise ValidationError("This plan requires an access voucher PIN")
+            # Serialize free activations per plan in PostgreSQL before checking history.
+            await db.execute(select(HotspotPlan).where(HotspotPlan.plan_id == "starter").with_for_update())
+            previous = (await db.execute(select(GuestSession).where(
+                GuestSession.ip == client_ip, GuestSession.plan_id == "starter"
+            ).order_by(GuestSession.id.desc()).limit(1))).scalar_one_or_none()
+            if previous:
+                expiry = previous.expires_at.replace(tzinfo=timezone.utc) if previous.expires_at.tzinfo is None else previous.expires_at
+                if previous.is_active and expiry > datetime.now(timezone.utc):
+                    return previous
+                raise ValidationError("Your free session has ended. Enter an access code to continue.")
         else:
             raise ValidationError("Please choose a plan or enter an access voucher")
 
@@ -202,10 +242,11 @@ class GuestService:
             chosen_plan.speed_limit_mbps
         )
 
+        await db.execute(update(GuestSession).where(GuestSession.ip == client_ip).values(is_active=False))
         session = GuestSession(
             ip=client_ip,
             plan_id=chosen_plan.plan_id,
-            voucher_code=voucher_code,
+            voucher_code=voucher_code.strip() if voucher_code else None,
             speed_limit_mbps=chosen_plan.speed_limit_mbps,
             authorized_at=now,
             expires_at=expires_at,
@@ -237,14 +278,17 @@ class GuestService:
     async def extend_session(db: AsyncSession, ip: str, additional_minutes: int = 30, actor: str = "admin") -> GuestSession:
         """Add more time to an active guest session."""
         now = datetime.now(timezone.utc)
-        stmt = select(GuestSession).where(GuestSession.ip == ip, GuestSession.is_active == True).order_by(GuestSession.id.desc())
+        stmt = select(GuestSession).where(GuestSession.ip == ip, GuestSession.is_active == True).order_by(GuestSession.id.desc()).limit(1)
         res = await db.execute(stmt)
         session = res.scalar_one_or_none()
 
         if not session:
             raise ResourceNotFoundError(f"Active session for {ip} not found")
 
-        base_time = max(now, session.expires_at)
+        if not 1 <= additional_minutes <= 43200:
+            raise ValidationError("Extension must be 1 to 43200 minutes")
+        expiry = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
+        base_time = max(now, expiry)
         session.expires_at = base_time + timedelta(minutes=additional_minutes)
 
         # Sync with agent

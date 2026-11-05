@@ -1,6 +1,10 @@
 """Hotspot plans, vouchers, and guest captive session endpoints."""
+import hashlib
+import hmac
+import time
+from ipaddress import IPv4Address
 from typing import List
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from ....db.session import get_db
 from ....schemas.guest import (
@@ -10,6 +14,7 @@ from ....schemas.guest import (
 from ....services.guest_service import GuestService
 from ...dependencies.auth import get_current_user
 from ....models.user import User
+from ....core.config import settings
 
 router = APIRouter(prefix="/guests", tags=["Guest Management"])
 
@@ -92,13 +97,47 @@ async def revoke_guest_session(
 
 # --- Public Endpoints for Captive Portal ---
 
+_connect_attempts = {}
+
+
+def limit_connect_attempts(ip: str):
+    now = time.monotonic()
+    for key, (started, count) in list(_connect_attempts.items()):
+        if now - started >= 60:
+            del _connect_attempts[key]
+    started, count = _connect_attempts.get(ip, (now, 0))
+    if count >= 10 or (ip not in _connect_attempts and len(_connect_attempts) >= 10000):
+        raise HTTPException(status_code=429, detail="Too many access attempts. Try again in one minute.")
+    _connect_attempts[ip] = (started, count + 1)
+
+
+def guest_client_ip(request: Request) -> str:
+    """Accept only gateway-signed client identity, never arbitrary forwarded headers."""
+    ip = request.headers.get("X-Captive-IP")
+    if ip is None:
+        return request.client.host if request.client else "unknown"
+    timestamp = request.headers.get("X-Captive-Time", "")
+    signature = request.headers.get("X-Captive-Signature", "")
+    secret = settings.CAPTIVE_PROXY_SECRET
+    try:
+        IPv4Address(ip)
+        if not secret or abs(time.time() - int(timestamp)) > 60:
+            raise ValueError()
+        expected = hmac.new(secret.encode(), f"{ip}|{timestamp}".encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid captive portal client identity")
+    return ip
+
+
 @router.get("/status")
 async def get_guest_status(
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """Public endpoint: returns whether the requesting client IP is authorized."""
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = guest_client_ip(request)
     sessions = await GuestService.list_active_sessions(db)
     active_session = next((s for s in sessions if s.ip == client_ip), None)
     plans = await GuestService.get_plans(db)
@@ -117,7 +156,8 @@ async def guest_connect(
     db: AsyncSession = Depends(get_db)
 ):
     """Public endpoint: authorize client IP via Starter agreement or voucher code."""
-    client_ip = request.client.host if request.client else "192.168.16.105"
+    client_ip = guest_client_ip(request)
+    limit_connect_attempts(client_ip)
     session = await GuestService.authorize_guest(db, client_ip, req.plan_id, req.voucher)
     return {
         "ok": True,

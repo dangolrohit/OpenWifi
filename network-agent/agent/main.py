@@ -147,15 +147,11 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 plan_id = payload.get("plan_id", "starter")
                 duration = int(payload.get("duration_minutes", 30))
                 speed = int(payload.get("speed_limit_mbps", 0))
-                res = ctrl.captive.authorize_client(ip, plan_id, duration, speed)
-                ctrl.firewall.update_guest_sessions(list(ctrl.captive.get_active_sessions().keys()))
-                if speed > 0:
-                    ctrl.firewall.set_speed_limit(ip, speed)
+                res = ctrl.authorize_guest(ip, plan_id, duration, speed)
                 self.respond_json(200, res)
             elif clean_path == "/captive/revoke":
                 ip = payload.get("ip")
-                res = ctrl.captive.revoke_client(ip)
-                ctrl.firewall.update_guest_sessions(list(ctrl.captive.get_active_sessions().keys()))
+                res = ctrl.revoke_guest(ip)
                 self.respond_json(200, res)
             else:
                 self.respond_json(404, {"error": f"Endpoint not found: {clean_path}"})
@@ -175,6 +171,7 @@ def background_maintenance(controller: AgentController):
 def run_agent():
     """Start the network agent daemon."""
     controller = AgentController()
+    controller.restore_guest_firewall()
     shared_secret = get_or_create_shared_secret()
 
     server = ThreadingHTTPServer((AGENT_HOST, AGENT_PORT), AgentRequestHandler)

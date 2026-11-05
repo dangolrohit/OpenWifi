@@ -1,7 +1,7 @@
 """Hotspot plans, vouchers, and guest management schemas."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 class PlanSchema(BaseModel):
     id: Optional[int] = None
@@ -18,7 +18,7 @@ class PlanSchema(BaseModel):
 
 class VoucherCreateRequest(BaseModel):
     plan_id: str = "standard"
-    code: Optional[str] = None
+    code: Optional[str] = Field(default=None, pattern=r"^[0-9]{6}$")
 
 class VoucherResponse(BaseModel):
     id: Optional[int] = None
@@ -43,10 +43,15 @@ class GuestSessionResponse(BaseModel):
     expires_at: datetime
     is_active: bool = True
 
+    @field_validator("authorized_at", "expires_at")
+    @classmethod
+    def ensure_utc(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
     class Config:
         from_attributes = True
 
 class GuestConnectRequest(BaseModel):
     plan_id: Optional[str] = None
-    voucher: Optional[str] = None
+    voucher: Optional[str] = Field(default=None, pattern=r"^[0-9]{6}$")
 

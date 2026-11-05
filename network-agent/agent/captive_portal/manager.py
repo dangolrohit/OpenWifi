@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from ..simulation.mock_provider import is_simulation_required, MockNetworkProvider
-from ..validators.network_validator import validate_ipv4
+from ..validators.network_validator import validate_ipv4, validate_speed_limit
 
 logger = logging.getLogger("wifirouter.captive")
 
@@ -41,7 +41,7 @@ class CaptivePortalManager:
             tmp.write_text(json.dumps(sessions, indent=2), encoding="utf-8")
             tmp.replace(self.state_file)
         except Exception as exc:
-            logger.warning(f"Could not save guest sessions: {exc}")
+            raise RuntimeError(f"Could not save guest sessions: {exc}") from exc
 
     def get_active_sessions(self) -> Dict[str, Dict[str, Any]]:
         """Return all active, unexpired guest sessions."""
@@ -56,6 +56,9 @@ class CaptivePortalManager:
     def authorize_client(self, ip: str, plan_id: str, duration_minutes: int, speed_limit_mbps: int = 0) -> Dict[str, Any]:
         """Authorize a client IP for internet access."""
         vip = validate_ipv4(ip, "192.168.16.0/24")
+        if not 1 <= duration_minutes <= 43200:
+            raise ValueError("Invalid guest duration")
+        validate_speed_limit(speed_limit_mbps)
         now = time.time()
         expires_at = now + (duration_minutes * 60)
 

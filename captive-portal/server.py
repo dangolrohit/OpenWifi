@@ -1,4 +1,7 @@
 """Lightweight, standalone captive portal daemon for hotspot probe detection and login redirection."""
+import hashlib
+import hmac
+import time
 import json
 import logging
 import os
@@ -13,7 +16,14 @@ HOST = os.environ.get("WIFIROUTER_CAPTIVE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WIFIROUTER_CAPTIVE_PORT", "8088"))
 GATEWAY_IP = os.environ.get("WIFIROUTER_GATEWAY_IP", "192.168.16.2")
 BACKEND_URL = os.environ.get("WIFIROUTER_BACKEND_URL", "http://127.0.0.1:8090")
+PROXY_SECRET = os.environ.get("WIFIROUTER_CAPTIVE_SECRET", "")
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "index.html"
+
+def client_headers(client_ip):
+    timestamp = str(int(time.time()))
+    signature = hmac.new(PROXY_SECRET.encode(), f"{client_ip}|{timestamp}".encode(), hashlib.sha256).hexdigest()
+    return {"X-Captive-IP": client_ip, "X-Captive-Time": timestamp, "X-Captive-Signature": signature}
+
 
 class CaptiveRequestHandler(BaseHTTPRequestHandler):
     server_version = "WiFiRouter-Captive/2.0"
@@ -43,7 +53,7 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
         if clean_path in probes:
             try:
                 # Check status via backend API
-                req = urllib.request.Request(f"{BACKEND_URL}/api/v1/guests/status", headers={"X-Forwarded-For": client_ip})
+                req = urllib.request.Request(f"{BACKEND_URL}/api/v1/guests/status", headers=client_headers(client_ip))
                 with urllib.request.urlopen(req, timeout=3) as resp:
                     if resp.status == 200:
                         data = json.loads(resp.read().decode())
@@ -69,10 +79,10 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
             return
 
         # Reverse proxy to backend API for guest status
-        if clean_path.startswith("/api/v1/guests/"):
+        if clean_path in ("/api/v1/guests/status", "/api/v1/guests/plans"):
             try:
                 url = f"{BACKEND_URL}{self.path}"
-                req = urllib.request.Request(url, headers={"X-Forwarded-For": client_ip})
+                req = urllib.request.Request(url, headers=client_headers(client_ip))
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     self.respond(resp.status, resp.read().decode(), "application/json")
                 return
@@ -91,10 +101,13 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
         clean_path = self.path.split("?")[0]
 
         # Reverse proxy to backend API for guest connection
-        if clean_path.startswith("/api/v1/guests/"):
+        if clean_path == "/api/v1/guests/connect":
             try:
                 size = int(self.headers.get("Content-Length", 0))
-                payload = self.rfile.read(size) if size > 0 else b"{}"
+                if not 0 < size <= 4096:
+                    self.respond(400, json.dumps({"error": "Invalid request size"}), "application/json")
+                    return
+                payload = self.rfile.read(size)
 
                 url = f"{BACKEND_URL}{self.path}"
                 req = urllib.request.Request(
@@ -102,11 +115,11 @@ class CaptiveRequestHandler(BaseHTTPRequestHandler):
                     data=payload,
                     headers={
                         "Content-Type": "application/json",
-                        "X-Forwarded-For": client_ip
+                        **client_headers(client_ip)
                     },
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=5) as resp:
+                with urllib.request.urlopen(req, timeout=25) as resp:
                     self.respond(resp.status, resp.read().decode(), "application/json")
                 return
             except urllib.error.HTTPError as e:
