@@ -104,20 +104,22 @@ async def websocket_endpoint(websocket: WebSocket):
 async def health():
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
 
+class SPAStaticFiles(StaticFiles):
+    """Static file provider with Single Page Application (SPA) fallback to index.html."""
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except Exception:
+            response = None
+        if response is None or response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
+
 # Locate frontend production build (in-container or local workspace)
 dist_dir = Path("/app/frontend/dist")
 if not dist_dir.exists():
     dist_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 if dist_dir.exists() and (dist_dir / "index.html").exists():
-    @app.exception_handler(404)
-    async def spa_404_handler(request: Request, exc: Exception):
-        """SPA fallback: serve index.html for client-side navigation."""
-        if not request.url.path.startswith("/api/"):
-            index_path = dist_dir / "index.html"
-            if index_path.exists():
-                return FileResponse(index_path)
-        return JSONResponse(status_code=404, content={"detail": "Not Found"})
-
-    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
