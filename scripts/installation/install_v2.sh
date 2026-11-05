@@ -66,11 +66,43 @@ if command -v fuser >/dev/null 2>&1; then
   fuser -k 8090/tcp 2>/dev/null || true
 fi
 
+# Generate or load persistent agent secret key
+install -d -m 750 /etc/wifirouter
+if [ ! -f /etc/wifirouter/agent.key ]; then
+  python3 -c "import secrets; print(secrets.token_hex(16))" > /etc/wifirouter/agent.key
+  chmod 600 /etc/wifirouter/agent.key
+fi
+AGENT_SECRET_KEY=$(tr -d '\r\n' < /etc/wifirouter/agent.key)
+
 # 5. Install Network Agent as host systemd service
 echo "[4/6] Installing WiFiRouter Network Agent systemd unit..."
 install -d -m 755 /opt/wifirouter
 cp -rf "$ROOT_DIR/network-agent" /opt/wifirouter/
-install -m 644 deployment/systemd/wifirouter-agent.service /etc/systemd/system/wifirouter-agent.service
+cat > /etc/systemd/system/wifirouter-agent.service <<SERVICE
+[Unit]
+Description=WiFiRouter Linux Network Management Agent
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/wifirouter/network-agent
+ExecStart=/usr/bin/python3 -m agent.main
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+Environment="PYTHONUNBUFFERED=1"
+Environment="WIFIROUTER_AGENT_HOST=0.0.0.0"
+Environment="WIFIROUTER_AGENT_PORT=8091"
+Environment="WIFIROUTER_AGENT_SECRET=${AGENT_SECRET_KEY}"
+Environment="WIFIROUTER_LAN_IFACE=enp1s0"
+Environment="WIFIROUTER_WAN_IFACE=wlp2s0"
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
 systemctl daemon-reload
 systemctl enable --now wifirouter-agent.service
 systemctl restart wifirouter-agent.service
@@ -79,10 +111,10 @@ systemctl restart wifirouter-agent.service
 echo "[5/6] Starting application services with Docker Compose..."
 if [ ! -f .env ]; then
   cp .env.example .env
-else
-  # Ensure container hostname is used for postgres in existing .env
-  sed -i 's/@localhost:5432/@postgres:5432/g' .env 2>/dev/null || true
 fi
+# Sync secret and database hostname in .env
+sed -i 's/@localhost:5432/@postgres:5432/g' .env 2>/dev/null || true
+sed -i "s|^WIFIROUTER_AGENT_SECRET=.*|WIFIROUTER_AGENT_SECRET=${AGENT_SECRET_KEY}|g" .env 2>/dev/null || true
 
 docker compose pull || true
 docker compose up -d --build

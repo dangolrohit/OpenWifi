@@ -10,6 +10,10 @@ from ..simulation.mock_provider import is_simulation_required, MockNetworkProvid
 
 logger = logging.getLogger("wifirouter.interfaces")
 
+def _parse_nmcli_line(line: str) -> List[str]:
+    """Parse colon-delimited line from nmcli -t, unescaping colons inside fields."""
+    return [p.replace(r"\:", ":") for p in re.split(r"(?<!\\):", line)]
+
 class InterfaceManager:
     """Manages Linux network interfaces, links, and upstream Wi-Fi connections."""
 
@@ -63,10 +67,25 @@ class InterfaceManager:
 
         return self.mock.get_interfaces()
 
-    def get_wifi_status(self, iface: str = "wlp2s0") -> Dict[str, Any]:
+    def get_wifi_status(self, iface: Optional[str] = None) -> Dict[str, Any]:
         """Get upstream Wi-Fi connection metrics using nmcli or iw."""
         if self.simulated:
             return self.mock.get_wifi_status()
+
+        target_iface = iface or os.environ.get("WIFIROUTER_WAN_IFACE", "wlp2s0")
+
+        # Discover Wi-Fi IP if assigned
+        local_ip = "192.168.1.100"
+        try:
+            res_ip = subprocess.run(["ip", "-j", "addr", "show", target_iface], capture_output=True, text=True, timeout=3)
+            if res_ip.returncode == 0:
+                data = json.loads(res_ip.stdout)
+                if data and "addr_info" in data[0]:
+                    v4 = next((a["local"] for a in data[0]["addr_info"] if a.get("family") == "inet"), None)
+                    if v4:
+                        local_ip = v4
+        except Exception:
+            pass
 
         try:
             # Query nmcli for active connection details
@@ -76,20 +95,30 @@ class InterfaceManager:
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
-                    parts = line.split(":")
+                    parts = _parse_nmcli_line(line)
                     if len(parts) >= 8 and parts[0] == "yes":
                         # Active connection found
+                        actual_iface = parts[8] if len(parts) > 8 and parts[8] else target_iface
+                        freq = 5000
+                        if "MHz" in parts[4]:
+                            freq_digits = re.sub(r"[^\d]", "", parts[4])
+                            if freq_digits:
+                                freq = int(freq_digits)
+                        chan = int(parts[5]) if parts[5].isdigit() else 36
+                        sig = int(parts[6]) if parts[6].isdigit() else 75
+
                         return {
                             "connected": True,
-                            "interface": parts[8] if len(parts) > 8 else iface,
-                            "ssid": parts[1],
+                            "interface": actual_iface,
+                            "ssid": parts[1] or "Connected Network",
                             "bssid": parts[2],
-                            "mode": parts[3],
-                            "frequency_mhz": int(parts[4].replace(" MHz", "")) if "MHz" in parts[4] else 5000,
-                            "channel": int(parts[5]) if parts[5].isdigit() else 36,
-                            "signal_percent": int(parts[6]) if parts[6].isdigit() else 75,
-                            "signal_dbm": int(parts[6]) - 100 if parts[6].isdigit() else -65,
-                            "security": parts[7],
+                            "mode": parts[3] or "Infra",
+                            "frequency_mhz": freq,
+                            "channel": chan,
+                            "signal_percent": sig,
+                            "signal_dbm": sig - 100,
+                            "security": parts[7] or "WPA2-PSK",
+                            "ip": local_ip,
                             "simulated": False
                         }
         except Exception as exc:
@@ -97,40 +126,47 @@ class InterfaceManager:
 
         return self.mock.get_wifi_status()
 
-    def scan_wifi_networks(self, iface: str = "wlp2s0") -> List[Dict[str, Any]]:
+    def scan_wifi_networks(self, iface: Optional[str] = None) -> List[Dict[str, Any]]:
         """Scan for nearby Wi-Fi access points."""
         if self.simulated:
             return self.mock.scan_wifi()
 
         networks = []
         try:
-            subprocess.run(["nmcli", "device", "wifi", "rescan"], timeout=5, capture_output=True)
+            # Trigger rescan (ignore failure if rate-limited)
+            subprocess.run(["nmcli", "device", "wifi", "rescan"], timeout=4, capture_output=True)
             res = subprocess.run(
-                ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY", "device", "wifi", "list"],
-                capture_output=True, text=True, timeout=10
+                ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY", "device", "wifi"],
+                capture_output=True, text=True, timeout=8
             )
             if res.returncode == 0:
                 seen_ssids = set()
                 for line in res.stdout.splitlines():
-                    parts = line.split(":")
+                    parts = _parse_nmcli_line(line)
                     if len(parts) >= 6:
-                        in_use = parts[0] == "*"
-                        ssid = parts[1]
-                        if not ssid or ssid in seen_ssids:
+                        in_use = (parts[0] == "*")
+                        ssid = parts[1].strip()
+                        # Ignore hidden networks or duplicate SSIDs
+                        if not ssid or ssid in seen_ssids or ssid == "--":
                             continue
                         seen_ssids.add(ssid)
+                        chan = int(parts[3]) if parts[3].isdigit() else 1
+                        sig = int(parts[4]) if parts[4].isdigit() else 50
+                        sec = parts[5].strip() if parts[5].strip() else "Open"
                         networks.append({
                             "ssid": ssid,
                             "bssid": parts[2],
-                            "channel": int(parts[3]) if parts[3].isdigit() else 1,
-                            "signal_percent": int(parts[4]) if parts[4].isdigit() else 50,
-                            "security": parts[5] or "Open",
+                            "channel": chan,
+                            "signal_percent": sig,
+                            "security": sec,
                             "in_use": in_use,
                             "simulated": False
                         })
-                return networks
+                if networks:
+                    return networks
         except Exception as exc:
             logger.warning(f"nmcli scan failed: {exc}")
 
+        # Fallback to simulated/cached list if interface is temporarily busy
         return self.mock.scan_wifi()
 

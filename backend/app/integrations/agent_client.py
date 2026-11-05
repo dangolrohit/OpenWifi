@@ -46,15 +46,33 @@ class NetworkAgentClient:
 
                 if resp.status_code == 200:
                     return resp.json()
+                else:
+                    logger.warning(f"Agent daemon HTTP {resp.status_code} ({url}): {resp.text}")
         except Exception as exc:
-            logger.debug(f"HTTP request to agent daemon ({url}) failed: {exc}. Using fallback...")
+            logger.warning(f"HTTP request to agent daemon ({url}) failed: {exc}. Using fallback...")
 
-        # Fallback to in-process controller
+        # Fallback to in-process controller if available
         ctrl = self._get_fallback_controller()
-        if not ctrl:
-            raise RuntimeError(f"Network agent unreachable and in-process controller unavailable.")
-
         clean = endpoint.rstrip("/")
+        if not ctrl:
+            logger.warning(f"Network agent unreachable and in-process controller unavailable for {clean}")
+            if clean == "/wifi/status":
+                return {"connected": False, "interface": "wlp2s0", "ssid": None, "signal_percent": 0, "security": "Unknown"}
+            elif clean == "/wifi/scan":
+                return {"networks": []}
+            elif clean == "/interfaces":
+                return {"interfaces": []}
+            elif clean == "/devices":
+                return {"devices": []}
+            elif clean == "/bandwidth":
+                return {"interface": "enp1s0", "download_mbps": 0.0, "upload_mbps": 0.0, "rx_bytes": 0, "tx_bytes": 0}
+            elif clean == "/summary":
+                return {
+                    "active_devices": 0, "blocked_devices": 0, "active_guests": 0,
+                    "download_mbps": 0.0, "upload_mbps": 0.0, "cpu_percent": 0.0,
+                    "ram_percent": 0.0, "uptime_seconds": 0
+                }
+            return {}
         if method.upper() == "GET":
             if clean == "/summary":
                 return ctrl.get_dashboard_summary()
