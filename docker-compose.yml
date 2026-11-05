@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: wifirouter-postgres
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-wifirouter}
       POSTGRES_USER: ${POSTGRES_USER:-wifirouter}
@@ -22,7 +22,7 @@ services:
       context: .
       dockerfile: deployment/docker/Dockerfile.backend
     container_name: wifirouter-backend
-    restart: unless-stopped
+    restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -50,7 +50,7 @@ services:
       context: .
       dockerfile: Dockerfile.captive
     container_name: wifirouter-captive
-    restart: unless-stopped
+    restart: always
     environment:
       WIFIROUTER_CAPTIVE_HOST: 0.0.0.0
       WIFIROUTER_CAPTIVE_PORT: 8088

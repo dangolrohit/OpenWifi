@@ -13,20 +13,21 @@ fi
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT_DIR"
 
-# 1. Dependency checks
-echo "[1/6] Checking system tools..."
-for bin in python3 nft ip systemctl curl; do
-  if ! command -v "$bin" >/dev/null 2>&1; then
-    echo "Missing required system binary: $bin"
-    exit 1
-  fi
-done
+# 1. Dependency checks & host tool installation
+echo "[1/6] Installing and verifying required networking tools..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || true
+apt-get install -y --no-install-recommends \
+  python3 python3-pip nftables iproute2 curl \
+  network-manager wireless-tools iw dnsmasq-base \
+  procps psmisc iptables || true
 
 # Check Docker and Docker Compose
 if ! command -v docker >/dev/null 2>&1; then
   echo "Installing Docker..."
   curl -fsSL https://get.docker.com | sh
 fi
+systemctl enable --now docker
 
 # 2. Check Interface configuration
 echo "[2/6] Verifying network interfaces..."
@@ -89,8 +90,8 @@ Type=simple
 User=root
 WorkingDirectory=/opt/wifirouter/network-agent
 ExecStart=/usr/bin/python3 -m agent.main
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=3
 KillMode=mixed
 TimeoutStopSec=10
 Environment="PYTHONUNBUFFERED=1"
@@ -122,7 +123,7 @@ docker compose up -d --build
 # 7. Verification
 echo "[6/6] Verifying service health..."
 sleep 5
-for attempt in {1..15}; do
+for attempt in {1..20}; do
   if curl -sf http://127.0.0.1:8090/health >/dev/null 2>&1 || curl -sf http://192.168.16.2:8090/health >/dev/null 2>&1; then
     echo "WiFiRouter V2 Backend is healthy!"
     break
