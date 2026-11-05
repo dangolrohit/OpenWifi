@@ -48,10 +48,22 @@ CONF
 touch /var/log/dnsmasq.log /var/log/oshin-dns.log
 chmod 666 /var/log/dnsmasq.log /var/log/oshin-dns.log
 
-# 4. Migrate Legacy Configuration (if exists)
+# 4. Migrate & Transition Legacy Configuration
 if [ -f /var/lib/oshin-firewall/blocked.json ]; then
   echo "Migrating legacy firewall state..."
   cp -a /var/lib/oshin-firewall/. /var/lib/wifirouter/ 2>/dev/null || true
+fi
+
+# Stop and disable legacy V1 portal service to free port 8090
+if systemctl list-unit-files | grep -q 'oshin-dashboard.service'; then
+  echo "Stopping and disabling legacy oshin-dashboard service..."
+  systemctl stop oshin-dashboard 2>/dev/null || true
+  systemctl disable oshin-dashboard 2>/dev/null || true
+fi
+
+# Free port 8090 if still held by any lingering process
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 8090/tcp 2>/dev/null || true
 fi
 
 # 5. Install Network Agent as host systemd service
