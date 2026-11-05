@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>WiFiRouter · Guest Hotspot</title>
+    <style>
+        :root {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #0f172a;
+            background: #f8fafc;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; }
+        .container { width: 100%; max-width: 440px; background: white; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06), 0 8px 10px -6px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #e2e8f0; }
+        .header { background: #0f172a; color: white; padding: 32px 24px; text-align: center; }
+        .logo { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; background: #0284c7; border-radius: 14px; font-size: 26px; margin-bottom: 12px; }
+        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+        .header p { color: #94a3b8; font-size: 14px; margin-top: 6px; }
+        .content { padding: 28px 24px; }
+        .card { border: 1.5px solid #e2e8f0; border-radius: 14px; padding: 20px; margin-bottom: 18px; transition: all .2s; }
+        .card.highlight { border-color: #0284c7; background: #f0f9ff; }
+        .card h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #0f172a; }
+        .card p { font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 16px; }
+        .plan-meta { display: flex; gap: 10px; margin-bottom: 16px; }
+        .meta-pill { background: #e2e8f0; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; color: #334155; }
+        .card.highlight .meta-pill { background: #e0f2fe; color: #0369a1; }
+        button { width: 100%; padding: 13px; border: 0; border-radius: 10px; background: #0284c7; color: white; font-size: 15px; font-weight: 650; cursor: pointer; transition: background .15s; }
+        button:hover { background: #0369a1; }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        .input-group { display: flex; gap: 8px; margin-top: 10px; }
+        input { flex: 1; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px; font-size: 16px; font-weight: 600; letter-spacing: 2px; text-align: center; }
+        input:focus { outline: none; border-color: #0284c7; }
+        .status { padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 16px; display: none; }
+        .status.error { background: #fef2f2; color: #b91c1c; display: block; }
+        .status.success { background: #f0fdf4; color: #15803d; display: block; }
+        .timer { font-size: 36px; font-weight: 800; color: #0284c7; margin: 12px 0; }
+        .connected-box { text-align: center; padding: 24px 0; }
+        .footer { text-align: center; font-size: 12px; color: #94a3b8; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">📶</div>
+            <h1>WiFiRouter Hotspot</h1>
+            <p>Welcome! Choose an access option to connect to the Internet.</p>
+        </div>
+        <div class="content" id="portal-content">
+            <div id="status-box" class="status"></div>
+
+            <!-- Starter Plan Card -->
+            <div class="card highlight" id="starter-card">
+                <h2>Starter Plan (Free)</h2>
+                <div class="plan-meta">
+                    <span class="meta-pill">⏱ 30 Minutes</span>
+                    <span class="meta-pill">⚡ 2 Mbps Limit</span>
+                </div>
+                <p>Free light web access. Tap below to agree to fair network usage and get online instantly.</p>
+                <button id="starter-btn">Yes, I Agree & Connect</button>
+            </div>
+
+            <!-- Access Voucher Card -->
+            <div class="card" id="voucher-card">
+                <h2>Have an Access Voucher?</h2>
+                <p>Enter the 6-digit access code provided by the administrator for extended high-speed access.</p>
+                <form id="voucher-form">
+                    <div class="input-group">
+                        <input type="text" id="voucher-code" maxlength="12" placeholder="000000" autocomplete="off" required>
+                        <button type="submit" id="voucher-btn" style="width: auto; padding: 0 20px;">Redeem</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="footer">
+                Protected by WiFiRouter V2 Gateway Security
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusBox = document.getElementById('status-box');
+        let countdownTimer = null;
+
+        function showMessage(msg, isError = false) {
+            statusBox.textContent = msg;
+            statusBox.className = 'status ' + (isError ? 'error' : 'success');
+            statusBox.style.display = 'block';
+        }
+
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/v1/guests/status');
+                const data = await res.json();
+                if (data.authorized && data.session) {
+                    renderConnected(data.session);
+                }
+            } catch (err) {
+                console.error("Status check failed", err);
+            }
+        }
+
+        function renderConnected(session) {
+            const content = document.getElementById('portal-content');
+            const expiresAt = new Date(session.expires_at).getTime();
+            
+            content.innerHTML = `
+                <div class="connected-box">
+                    <div style="font-size: 52px; margin-bottom: 12px;">✅</div>
+                    <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 6px;">You Are Online!</h2>
+                    <p style="color: #64748b; font-size: 14px;">Your Internet session is active and monitored under fair usage.</p>
+                    <div class="timer" id="time-left">--:--</div>
+                    <div style="font-size: 13px; color: #64748b; margin-top: 8px;">
+                        Plan: <b>${session.plan_id.toUpperCase()}</b> · Limit: <b>${session.speed_limit_mbps ? session.speed_limit_mbps + ' Mbps' : 'Standard'}</b>
+                    </div>
+                </div>
+            `;
+
+            function updateTimer() {
+                const now = Date.now();
+                const diff = Math.max(0, Math.floor((expiresAt - now) / 1000));
+                const mins = Math.floor(diff / 60);
+                const secs = diff % 60;
+                const timerElem = document.getElementById('time-left');
+                if (timerElem) {
+                    timerElem.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+                }
+                if (diff <= 0) {
+                    clearInterval(countdownTimer);
+                    location.reload();
+                }
+            }
+
+            updateTimer();
+            countdownTimer = setInterval(updateTimer, 1000);
+        }
+
+        async function connect(payload, btn) {
+            if (btn) btn.disabled = true;
+            statusBox.style.display = 'none';
+            try {
+                const res = await fetch('/api/v1/guests/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.detail || d.error || 'Connection failed');
+                showMessage('Internet access granted! Activating session…');
+                setTimeout(() => {
+                    checkStatus();
+                }, 1000);
+            } catch (err) {
+                showMessage(err.message, true);
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        document.getElementById('starter-btn').onclick = (e) => {
+            connect({ plan_id: 'starter' }, e.target);
+        };
+
+        document.getElementById('voucher-form').onsubmit = (e) => {
+            e.preventDefault();
+            const code = document.getElementById('voucher-code').value.trim();
+            if (code) connect({ voucher: code }, document.getElementById('voucher-btn'));
+        };
+
+        checkStatus();
+    </script>
+</body>
+</html>
+
