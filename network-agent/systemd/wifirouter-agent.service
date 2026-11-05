@@ -1,0 +1,20 @@
+[Unit]
+Description=WiFiRouter Linux Network Management Agent
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/wifirouter/network-agent
+ExecStart=/usr/bin/python3 -m agent.main
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+Environment="PYTHONUNBUFFERED=1"
+Environment="WIFIROUTER_LAN_IFACE=enp1s0"
+Environment="WIFIROUTER_WAN_IFACE=wlp2s0"
+
+[Install]
+WantedBy=multi-user.target

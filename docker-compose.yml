@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wifirouter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wifirouter}
+      POSTGRES_USER: ${POSTGRES_USER:-wifirouter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wifirouter_secure_pg_pass_2026}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wifirouter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wifirouter-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.backend
+    container_name: wifirouter-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wifirouter}:${POSTGRES_PASSWORD:-wifirouter_secure_pg_pass_2026}@postgres:5432/${POSTGRES_DB:-wifirouter}
+      WIFIROUTER_SECRET_KEY: ${WIFIROUTER_SECRET_KEY:-wifirouter-super-secret-jwt-session-key-change-in-production}
+      WIFIROUTER_AGENT_URL: http://172.17.0.1:8091
+      WIFIROUTER_AGENT_SECRET: ${WIFIROUTER_AGENT_SECRET:-wifirouter-dev-insecure-agent-secret-key-32b}
+      HOST: 0.0.0.0
+      PORT: 8090
+    ports:
+      - "192.168.16.2:8090:8090"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - wifirouter-net
+
+  captive-portal:
+    build:
+      context: .
+      dockerfile: Dockerfile.captive
+    container_name: wifirouter-captive
+    restart: unless-stopped
+    environment:
+      WIFIROUTER_CAPTIVE_HOST: 0.0.0.0
+      WIFIROUTER_CAPTIVE_PORT: 8088
+      WIFIROUTER_BACKEND_URL: http://backend:8090
+      WIFIROUTER_GATEWAY_IP: 192.168.16.2
+    ports:
+      - "192.168.16.2:8088:8088"
+    depends_on:
+      - backend
+    networks:
+      - wifirouter-net
+
+volumes:
+  postgres_data:
+    name: wifirouter_postgres_data
+
+networks:
+  wifirouter-net:
+    name: wifirouter-network
+

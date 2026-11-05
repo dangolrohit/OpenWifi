@@ -3,9 +3,31 @@ __pycache__/
 .venv/
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 auth.json
 blocked.json
 *.tar.gz
 *.log
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.npm/
+
+# Testing & Cache
+.coverage
+.pytest_cache/
+.mypy_cache/
+.vite/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
