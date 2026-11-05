@@ -606,3 +606,90 @@ td button {
         font-size: 12px
     }
 }
+
+.badge.group-family {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.badge.group-customer {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.badge.group-staff {
+    background: #f3e8ff;
+    color: #6b21a8;
+}
+
+.badge.group-default {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 43, 43, 0.65);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal {
+    background: white;
+    border-radius: 14px;
+    padding: 28px;
+    max-width: 500px;
+    width: 92%;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2);
+}
+
+.modal h3 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    letter-spacing: -.3px;
+}
+
+.modal .form-row {
+    margin-bottom: 16px;
+}
+
+.modal .form-row label {
+    margin: 0 0 6px;
+    font-size: 13px;
+    font-weight: 650;
+    display: block;
+}
+
+.modal .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 24px;
+}
+
+.time-inputs {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.time-inputs input {
+    flex: 1;
+}
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 550 !important;
+}
+
+.checkbox-label input {
+    width: auto !important;
+    margin: 0;
+}

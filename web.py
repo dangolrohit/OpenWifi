@@ -38,16 +38,42 @@ def helper(*args):
     return json.loads(result.stdout)
 
 def devices():
-    blocked = set(helper('status')['blocked'])
+    status = helper('status')
+    blocked = set(status.get('blocked', []))
+    scheduled = set(status.get('scheduled_active', []))
+    meta = status.get('metadata', {}).get('devices', {})
     result = subprocess.run(['/usr/sbin/ip', '-j', '-4', 'neigh', 'show', 'dev', 'enp1s0'], capture_output=True, text=True, timeout=5, check=True)
     rows = {}
     for item in json.loads(result.stdout):
         addr = ipaddress.IPv4Address(item['dst'])
         if addr not in ipaddress.IPv4Network('192.168.16.0/24') or int(addr) % 256 in (0,1,2,255): continue
         ip = str(addr)
-        rows[ip] = {'ip':ip, 'mac':item.get('lladdr',''), 'state':', '.join(item.get('state',[])), 'blocked':ip in blocked}
-    for ip in blocked:
-        rows.setdefault(ip, {'ip':ip,'mac':'','state':'Not in neighbour cache','blocked':True})
+        dev_meta = meta.get(ip, {})
+        rows[ip] = {
+            'ip': ip,
+            'mac': item.get('lladdr',''),
+            'state': ', '.join(item.get('state',[])),
+            'blocked': ip in blocked,
+            'scheduled': ip in scheduled,
+            'name': dev_meta.get('name', ''),
+            'group': dev_meta.get('group', 'default'),
+            'speed_limit': dev_meta.get('speed_limit', 0),
+            'schedule': dev_meta.get('schedule', {'enabled': False, 'start': '22:00', 'end': '06:00'})
+        }
+    for ip in blocked | set(meta.keys()):
+        if ip not in rows:
+            dev_meta = meta.get(ip, {})
+            rows[ip] = {
+                'ip': ip,
+                'mac': '',
+                'state': 'Not in neighbour cache',
+                'blocked': ip in blocked,
+                'scheduled': ip in scheduled,
+                'name': dev_meta.get('name', ''),
+                'group': dev_meta.get('group', 'default'),
+                'speed_limit': dev_meta.get('speed_limit', 0),
+                'schedule': dev_meta.get('schedule', {'enabled': False, 'start': '22:00', 'end': '06:00'})
+            }
     return sorted(rows.values(), key=lambda x:ipaddress.IPv4Address(x['ip']))
 
 def usage():
@@ -176,6 +202,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,res)
             except Exception as e:self.respond(503,{'error':str(e)})
             return
+        if self.path=='/api/device/update':
+            try:
+                ip=str(ipaddress.IPv4Address(data.get('ip','')))
+                payload={
+                    'name':str(data.get('name',''))[:64],
+                    'group':data.get('group','default'),
+                    'speed_limit':int(data.get('speed_limit',0)),
+                    'schedule':data.get('schedule',{})
+                }
+                res=helper('set_device',ip,json.dumps(payload))
+                audit('Updated device settings',self.client_address[0],f"{ip} ({payload['name'] or payload['group']})")
+                self.respond(200,res)
+            except (ValueError,TypeError) as e:self.respond(400,{'error':str(e) or 'Invalid device settings'})
+            except Exception as e:self.respond(503,{'error':str(e)})
+            return
         if self.path=='/api/action':
             try:
                 if data.get('action') not in ('block','unblock'):raise ValueError()
@@ -188,12 +229,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:self.respond(503,{'error':str(e)})
         else:self.respond(404,{'error':'Not found'})
 
+def schedule_worker():
+    while True:
+        time.sleep(60)
+        try:
+            helper('apply_schedules')
+        except Exception:
+            pass
+
 def main():
     global CONFIG
     CONFIG=json.loads(Path('/etc/oshin-dashboard/auth.json').read_text())
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version=ssl.TLSVersion.TLSv1_2
     context.load_cert_chain('/etc/oshin-dashboard/cert.pem','/etc/oshin-dashboard/key.pem')
+    threading.Thread(target=schedule_worker, daemon=True).start()
     server=ThreadingHTTPServer((HOST,PORT),Handler)
     server.socket=context.wrap_socket(server.socket,server_side=True)
     print('Portal listening at '+ORIGIN,flush=True);server.serve_forever()

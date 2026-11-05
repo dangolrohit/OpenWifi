@@ -9,9 +9,9 @@ const login = document.getElementById('login-form');
 if (login) { login.onsubmit = async e => { e.preventDefault(); const b = login.querySelector('button'); b.disabled = true; message.textContent = 'Signing in…'; try { await api('/api/login', { username: login.username.value, password: login.password.value }); location.replace('/dashboard'); } catch (e) { error(e); b.disabled = false; } }; }
 else {
     const pages = {
-        dashboard: ['Dashboard', 'A clear view of your network and access controls.'],
+        dashboard: ['Dashboard', 'A clear view of your network, family devices, and customer isolation.'],
         wifi: ['Wifi Settings', 'Manage the access point and wireless configuration.'],
-        devices: ['Connected Device', 'Review devices discovered by your Ubuntu gateway.'],
+        devices: ['Connected Device', 'Review devices, assign nicknames, set speed limits, and manage curfews.'],
         filtering: ['Device Filtering', 'Control IPv4 internet access by device address.'],
         usages: ['Usages', 'Network traffic measured on the access-point interface.'],
         activity: ['Activity Logs', 'Monitor website and domain requests from connected devices.'],
@@ -24,19 +24,131 @@ else {
     if (activeNav) activeNav.classList.add('active');
     const menu = document.getElementById('menu'); menu.onclick = () => { const open = document.getElementById('sidebar').classList.toggle('open'); menu.setAttribute('aria-expanded', String(open)); };
     document.getElementById('logout').onclick = async () => { try { await api('/api/logout', {}); location.replace('/login'); } catch (e) { error(e); } };
-    const page = document.getElementById('page'); let loading = false, previousUsage = null, timer = null;
+    const page = document.getElementById('page'); let loading = false, previousUsage = null, timer = null, currentDevices = [];
     const detail = (name, value) => `<div class="detail"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`;
     const card = (label, value, foot) => `<div class="card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(foot)}</small></div>`;
-    function deviceTable(data, filtered = false) {
-        const rows = filtered ? data.devices.filter(x => x.blocked) : data.devices;
-        return `<div class="tablewrap"><table><thead><tr><th>IP address</th><th>MAC address</th><th>Neighbour state</th><th>Access rule</th><th>Action</th></tr></thead><tbody>${rows.map(x => `<tr data-search="${esc(x.ip + ' ' + x.mac)}"><td><strong>${esc(x.ip)}</strong>${x.ip === data.client ? ' <span class="muted">(you)</span>' : ''}</td><td>${esc(x.mac || 'Unknown')}</td><td>${esc(x.state)}</td><td><span class="badge ${x.blocked ? 'off' : ''}">${x.blocked ? 'Blocked' : 'No block rule'}</span></td><td><div class="row-actions"><a class="button secondary small" href="/activity?ip=${esc(x.ip)}" title="View activity for ${esc(x.ip)}">Activity</a><button class="${x.blocked ? '' : 'danger'} small" data-action="${x.blocked ? 'unblock' : 'block'}" data-ip="${esc(x.ip)}" ${x.ip === data.client && !x.blocked ? 'disabled' : ''}>${x.blocked ? 'Unblock' : 'Block'}</button></div></td></tr>`).join('')}</tbody></table>${rows.length ? '' : '<div class="empty">' + (filtered ? 'No blocked addresses.' : 'No devices discovered yet. Connect a device and browse, then refresh.') + '</div>'}</div>`;
+
+    function groupBadge(group) {
+        if (group === 'family') return '<span class="badge group-family">Family</span>';
+        if (group === 'customer') return '<span class="badge group-customer" title="Isolated from LAN, Admin portal locked">Customer 🔒</span>';
+        if (group === 'staff') return '<span class="badge group-staff">Staff</span>';
+        return '<span class="badge group-default">Unassigned</span>';
     }
+
+    function statusBadge(dev) {
+        if (dev.blocked) return '<span class="badge off">Blocked</span>';
+        if (dev.scheduled) return '<span class="badge off" title="Curfew active">🌙 Curfew Active</span>';
+        if (dev.schedule && dev.schedule.enabled) return `<span class="badge" title="Schedule active between ${dev.schedule.start} and ${dev.schedule.end}">⏱ ${dev.schedule.start}-${dev.schedule.end}</span>`;
+        return '<span class="badge">Active</span>';
+    }
+
+    function openEditModal(dev) {
+        const existing = document.getElementById('edit-modal');
+        if (existing) existing.remove();
+        const sched = dev.schedule || { enabled: false, start: '22:00', end: '06:00' };
+        const modalHtml = `
+        <div class="modal-backdrop" id="edit-modal">
+            <div class="modal">
+                <h3>Configure Device: ${esc(dev.name || dev.ip)}</h3>
+                <p class="muted" style="margin-top:-8px; margin-bottom:16px;">IP: ${esc(dev.ip)} ${dev.mac ? '· MAC: ' + esc(dev.mac) : ''}</p>
+                <form id="device-edit-form">
+                    <div class="form-row">
+                        <label for="edit-name">Device Nickname</label>
+                        <input id="edit-name" value="${esc(dev.name || '')}" placeholder="e.g. Dad's iPhone, Living Room TV, Table 4 Customer">
+                    </div>
+                    <div class="form-row">
+                        <label for="edit-group">Network Group</label>
+                        <select id="edit-group">
+                            <option value="family" ${dev.group === 'family' ? 'selected' : ''}>Family (Full LAN access, admin allowed)</option>
+                            <option value="customer" ${dev.group === 'customer' ? 'selected' : ''}>Customer / Guest (Isolated from LAN, Admin portal locked)</option>
+                            <option value="staff" ${dev.group === 'staff' ? 'selected' : ''}>Staff / Business</option>
+                            <option value="default" ${dev.group === 'default' ? 'selected' : ''}>Default / Unassigned</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label for="edit-speed">Bandwidth Speed Limit (QoS)</label>
+                        <select id="edit-speed">
+                            <option value="0" ${dev.speed_limit === 0 ? 'selected' : ''}>Unlimited (Full gateway speed)</option>
+                            <option value="2" ${dev.speed_limit === 2 ? 'selected' : ''}>2 Mbps (Light browsing)</option>
+                            <option value="5" ${dev.speed_limit === 5 ? 'selected' : ''}>5 Mbps (Recommended for customers)</option>
+                            <option value="10" ${dev.speed_limit === 10 ? 'selected' : ''}>10 Mbps (Fast streaming)</option>
+                            <option value="20" ${dev.speed_limit === 20 ? 'selected' : ''}>20 Mbps (High bandwidth)</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-sched-enabled" ${sched.enabled ? 'checked' : ''}>
+                            Enable Access Schedule (Bedtime / Curfew)
+                        </label>
+                        <div id="sched-box" style="margin-top:10px; ${sched.enabled ? '' : 'display:none;'}">
+                            <label>Block internet between:</label>
+                            <div class="time-inputs">
+                                <input type="time" id="edit-sched-start" value="${esc(sched.start || '22:00')}">
+                                <span>to</span>
+                                <input type="time" id="edit-sched-end" value="${esc(sched.end || '06:00')}">
+                            </div>
+                            <small class="muted">Internet access for this device will be automatically blocked during this window.</small>
+                        </div>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="secondary" id="modal-cancel">Cancel</button>
+                        <button type="submit" id="modal-save">Save Settings</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        const modal = document.getElementById('edit-modal');
+        const form = document.getElementById('device-edit-form');
+        const schedCheck = document.getElementById('edit-sched-enabled');
+        const schedBox = document.getElementById('sched-box');
+        schedCheck.onchange = () => { schedBox.style.display = schedCheck.checked ? 'block' : 'none'; };
+        document.getElementById('modal-cancel').onclick = () => { modal.remove(); };
+        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+        form.onsubmit = async (e) => {
+            e.preventDefault();
+            const saveBtn = document.getElementById('modal-save');
+            saveBtn.disabled = true;
+            try {
+                await api('/api/device/update', {
+                    ip: dev.ip,
+                    name: document.getElementById('edit-name').value.trim(),
+                    group: document.getElementById('edit-group').value,
+                    speed_limit: Number(document.getElementById('edit-speed').value),
+                    schedule: {
+                        enabled: schedCheck.checked,
+                        start: document.getElementById('edit-sched-start').value || '22:00',
+                        end: document.getElementById('edit-sched-end').value || '06:00'
+                    }
+                });
+                modal.remove();
+                await load();
+            } catch (err) {
+                error(err);
+                saveBtn.disabled = false;
+            }
+        };
+    }
+
+    function deviceTable(data, filtered = false) {
+        currentDevices = data.devices;
+        const rows = filtered ? data.devices.filter(x => x.blocked || x.scheduled) : data.devices;
+        return `<div class="tablewrap"><table><thead><tr><th>Device & Identity</th><th>MAC address</th><th>Group</th><th>Speed limit</th><th>Access status</th><th>Action</th></tr></thead><tbody>${rows.map(x => `<tr data-search="${esc((x.name || '') + ' ' + x.ip + ' ' + x.mac + ' ' + x.group)}"><td><strong>${esc(x.name || x.ip)}</strong>${x.name ? `<br><small class="muted">${esc(x.ip)}</small>` : ''}${x.ip === data.client ? ' <span class="muted">(you)</span>' : ''}</td><td>${esc(x.mac || 'Unknown')}</td><td>${groupBadge(x.group)}</td><td>${x.speed_limit ? esc(x.speed_limit) + ' Mbps' : '<span class="muted">Unlimited</span>'}</td><td>${statusBadge(x)}</td><td><div class="row-actions"><button class="secondary small" data-edit="${esc(x.ip)}" title="Configure nickname, speed limit, and schedule">⚙ Edit</button><a class="button secondary small" href="/activity?ip=${esc(x.ip)}" title="View activity for ${esc(x.ip)}">Activity</a><button class="${x.blocked ? '' : 'danger'} small" data-action="${x.blocked ? 'unblock' : 'block'}" data-ip="${esc(x.ip)}" ${x.ip === data.client && !x.blocked ? 'disabled' : ''}>${x.blocked ? 'Unblock' : 'Block'}</button></div></td></tr>`).join('')}</tbody></table>${rows.length ? '' : '<div class="empty">' + (filtered ? 'No blocked addresses.' : 'No devices discovered yet. Connect a device and browse, then refresh.') + '</div>'}</div>`;
+    }
+
     function wireActions() {
         page.querySelectorAll('[data-action]').forEach(b => {
             b.onclick = async () => {
                 if (!confirm(`${b.dataset.action === 'block' ? 'Block' : 'Unblock'} IPv4 internet access for ${b.dataset.ip}?`)) return;
                 b.disabled = true;
                 try { await api('/api/action', { action: b.dataset.action, ip: b.dataset.ip }); await load(); } catch (e) { error(e); b.disabled = false; }
+            };
+        });
+        page.querySelectorAll('[data-edit]').forEach(b => {
+            b.onclick = () => {
+                const dev = currentDevices.find(d => d.ip === b.dataset.edit);
+                if (dev) openEditModal(dev);
             };
         });
         const search = document.getElementById('search');
@@ -46,12 +158,51 @@ else {
             });
         };
     }
+
     async function load() {
         if (loading) return; loading = true; message.className = 'status'; message.textContent = 'Updating…'; try {
             if (['dashboard', 'devices', 'filtering'].includes(key)) {
-                const data = await api('/api/devices'); const blocked = data.devices.filter(x => x.blocked).length;
-                if (key === 'dashboard') page.innerHTML = `<div class="cards">${card('Discovered addresses', data.devices.length, 'Neighbour cache + saved blocks')}${card('Blocked addresses', blocked, 'IPv4 access controls')}${card('Gateway', '192.168.16.2', 'Ubuntu · enp1s0')}</div><div class="split"><section class="panel"><h2>Network details</h2>${detail('Wireless network', 'OshinWiFi (configured name)')}${detail('Access point', '192.168.16.1')}${detail('Management', 'HTTPS · Port 8090')}</section><section class="panel"><h2>Access controls</h2><p>Manage internet access for devices using your gateway.</p><a class="button" href="/filtering">Manage filtering →</a><p class="muted">Rules follow IP addresses, not device identities.</p></section></div><section class="panel"><h2>Device overview</h2>${deviceTable(data)}</section>`;
-                else page.innerHTML = `<div class="notice">${key === 'filtering' ? 'Blocks apply to routed IPv4 traffic. Wi-Fi association and local communication remain available. A changed IP can bypass a rule.' : 'This is Ubuntu’s neighbour cache, not an exact Wi-Fi association list. STALE means previously seen; it does not prove a device is offline.'}</div><section class="panel"><h2>${key === 'filtering' ? 'Blocked addresses' : 'Discovered devices'}</h2><input class="search" id="search" placeholder="Search IP or MAC address" aria-label="Search devices">${deviceTable(data, key === 'filtering')}${key === 'filtering' ? '<p class="muted">To block another device, open <a href="/devices">Connected Device</a>.</p>' : ''}</section>`;
+                const data = await api('/api/devices');
+                currentDevices = data.devices;
+                const blocked = data.devices.filter(x => x.blocked || x.scheduled).length;
+                const familyCount = data.devices.filter(x => x.group === 'family').length;
+                const customerCount = data.devices.filter(x => x.group === 'customer').length;
+                if (key === 'dashboard') {
+                    page.innerHTML = `
+                    <div class="cards">
+                        ${card('Total devices', data.devices.length, 'Discovered on Wi-Fi')}
+                        ${card('Family devices', familyCount, 'Private LAN access')}
+                        ${card('Customers (Isolated)', customerCount, 'Portal locked · QoS capped')}
+                    </div>
+                    <div class="notice"><strong>Network Security Active:</strong> Devices marked as <em>Customer</em> are blocked from opening the administrator portal (port 8090) and isolated from accessing family devices. Speed limits (QoS) and access curfews apply automatically.</div>
+                    <div class="split">
+                        <section class="panel">
+                            <h2>Network configuration</h2>
+                            ${detail('Wireless network', 'OshinWiFi (configured name)')}
+                            ${detail('Gateway', '192.168.16.2 · Ubuntu')}
+                            ${detail('Access point', '192.168.16.1 · AP mode')}
+                            ${detail('Management', 'HTTPS · Port 8090')}
+                        </section>
+                        <section class="panel">
+                            <h2>Access & QoS controls</h2>
+                            <p>Assign friendly device nicknames, separate customers from family devices, set bandwidth caps, or configure bedtime curfews.</p>
+                            <a class="button" href="/devices">Manage devices & limits →</a>
+                        </section>
+                    </div>
+                    <section class="panel">
+                        <h2>Device overview</h2>
+                        ${deviceTable(data)}
+                    </section>`;
+                } else {
+                    page.innerHTML = `
+                    <div class="notice">${key === 'filtering' ? 'Blocks apply to routed IPv4 traffic. Wi-Fi association and local communication remain available. A changed IP can bypass a rule.' : 'Assign friendly names, categorize devices into Family vs. Customer, enforce speed limits, and set automatic access curfews.'}</div>
+                    <section class="panel">
+                        <h2>${key === 'filtering' ? 'Blocked addresses' : 'Discovered devices'}</h2>
+                        <input class="search" id="search" placeholder="Search by name, IP, MAC address, or group" aria-label="Search devices">
+                        ${deviceTable(data, key === 'filtering')}
+                        ${key === 'filtering' ? '<p class="muted">To edit device groups or speed limits, open <a href="/devices">Connected Device</a>.</p>' : ''}
+                    </section>`;
+                }
                 wireActions();
             } else if (key === 'wifi') {
                 page.innerHTML = `<section class="panel"><h2>Wireless access point</h2>${detail('Router', 'LB-Link BL-WR450H')}${detail('Mode', 'AP mode — configured during setup')}${detail('Wi-Fi name', 'OshinWiFi — configured during setup')}${detail('Management address', '192.168.16.1')}<div class="notice">Direct router integration is not configured. Change the Wi-Fi name, password, channel, and guest settings in the router’s own admin page.</div><a class="button" href="http://192.168.16.1" target="_blank" rel="noopener noreferrer">Open router settings ↗</a></section>`;
@@ -76,7 +227,7 @@ else {
                     <div class="activity-toolbar">
                         <select id="activity-device" aria-label="Select device">
                             <option value="">All Connected Devices (${(d.devices || []).length})</option>
-                            ${(d.devices || []).map(dev => `<option value="${esc(dev.ip)}" ${filterIp === dev.ip ? 'selected' : ''}>${esc(dev.ip)}${dev.mac ? ' (' + esc(dev.mac) + ')' : ''}${dev.ip === d.client ? ' (you)' : ''}</option>`).join('')}
+                            ${(d.devices || []).map(dev => `<option value="${esc(dev.ip)}" ${filterIp === dev.ip ? 'selected' : ''}>${esc(dev.name ? dev.name + ' (' + dev.ip + ')' : dev.ip)}${dev.ip === d.client ? ' (you)' : ''}</option>`).join('')}
                         </select>
                         <input class="search" id="activity-search" placeholder="Filter by domain or IP (e.g. youtube, google)" aria-label="Search activity">
                         <button class="secondary" id="clear-activity">Clear activity history</button>
@@ -121,7 +272,7 @@ else {
             } else if (key === 'logs') {
                 const d = await api('/api/logs'); page.innerHTML = `<div class="notice">Administrator sign-ins, sign-outs, and filtering actions only. To view website domains looked up by Wi-Fi clients, see <a href="/activity">Activity Logs</a>. The latest 300 events are kept in memory and reset when the service restarts.</div><section class="panel"><h2>Recent administrator activity</h2><div class="tablewrap"><table><thead><tr><th>Time</th><th>Activity</th><th>Admin address</th><th>Target</th></tr></thead><tbody>${d.events.map(e => `<tr><td>${esc(new Date(e.time * 1000).toLocaleString())}</td><td>${esc(e.action)}</td><td>${esc(e.client)}</td><td>${esc(e.target || '—')}</td></tr>`).join('')}</tbody></table>${d.events.length ? '' : '<div class="empty">No events in this service session.</div>'}</div></section>`;
             } else if (key === 'settings') {
-                page.innerHTML = `<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, activity, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username', 'admin')}${detail('Idle timeout', '30 minutes')}${detail('Maximum session', '8 hours')}${detail('Authentication', 'Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway', '192.168.16.2/24')}${detail('Downstream interface', 'enp1s0')}${detail('Router', '192.168.16.1')}${detail('Portal version', '2.1')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`; let value = '0'; try { value = localStorage.getItem('oshin-refresh') || '0'; } catch { } const select = document.getElementById('interval'); select.value = value; select.onchange = () => { try { localStorage.setItem('oshin-refresh', select.value); } catch { } schedule(); };
+                page.innerHTML = `<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, activity, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username', 'admin')}${detail('Idle timeout', '30 minutes')}${detail('Maximum session', '8 hours')}${detail('Authentication', 'Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway', '192.168.16.2/24')}${detail('Downstream interface', 'enp1s0')}${detail('Router', '192.168.16.1')}${detail('Portal version', '2.2')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`; let value = '0'; try { value = localStorage.getItem('oshin-refresh') || '0'; } catch { } const select = document.getElementById('interval'); select.value = value; select.onchange = () => { try { localStorage.setItem('oshin-refresh', select.value); } catch { } schedule(); };
             }
             message.textContent = 'Updated ' + new Date().toLocaleTimeString();
         } catch (e) { error(e); } finally { loading = false; }

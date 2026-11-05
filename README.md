@@ -45,16 +45,17 @@ local self-signed certificate. Verify the SHA-256 fingerprint printed by the
 installer before accepting the browser certificate warning. Keep the portal
 private; do not expose it to the public internet.
 
-## Pages in version 2.1
+## Pages in version 2.2
 
-- Dashboard: discovered addresses, blocked count, gateway information.
+- Dashboard: overview of total discovered devices, family devices, isolated customer
+  devices, and active access rules.
 - Wifi Settings: configured network details and link to the router admin UI.
   Direct SSID/password editing requires a router integration not yet provided.
-- Connected Device: discovered IP/MAC addresses, search, block/unblock, and direct
-  "Activity" link to inspect queries for that specific device.
+- Connected Device: full device management. Assign device nicknames (e.g., "Dad's Phone",
+  "Table 4 Customer"), assign network groups (Family, Customer, Staff), configure QoS
+  speed limits (e.g. 5 Mbps), set bedtime/curfew access schedules, and block/unblock.
 - Device Filtering: current blocked addresses and unblock controls.
-- Usages: real aggregate enp1s0 RX/TX counters and average rate between refreshes;
-  includes local traffic, not per-user internet totals. No monthly history yet.
+- Usages: real aggregate enp1s0 RX/TX counters and average rate between refreshes.
 - Activity Logs: real-time DNS query monitoring recording website and domain requests
   (e.g., youtube.com, instagram.com) made by connected devices. Filterable by client
   device IP, searchable by domain name, and clearable by the administrator.
@@ -65,14 +66,16 @@ private; do not expose it to the public internet.
 
 ## What it does
 
-- Password-protected device list drawn from Ubuntu's IPv4 neighbour cache.
+- Device identification: assign custom nicknames and categorize devices into Family vs. Customer.
+- Customer Isolation & Portal Lockdown: devices marked as Customer are blocked from opening
+  the admin portal (port 8090) and isolated from accessing family devices on the local subnet.
+- Bandwidth QoS / Speed Limits: throttle customer or heavy-usage devices (e.g. 2 Mbps, 5 Mbps,
+  10 Mbps) to ensure family devices always have full gateway speed.
+- Access Schedules (Curfews & Bedtime): automatically disable internet access for selected
+  devices during bedtime (e.g. 22:00 to 06:00) or outside business hours.
 - Website and domain activity tracking via gateway DNS query logging.
 - IPv4 block/unblock for selected addresses. Changes persist across reboot.
-- Blocks both incoming and outgoing forwarded IPv4 packets for the selected
-  address on enp1s0. Applies to all routed destinations, including the upstream LAN.
-- Blocks stop internet traffic, not Wi-Fi association or same-subnet local traffic.
 - The admin's current client IP cannot block itself through the UI.
-- No per-device bandwidth history, hostnames, speed limits or captive portal in this version.
 
 Devices appear after they exchange traffic with the gateway. The list is not a
 definitive list of Wi-Fi connections. STALE is a neighbour-cache state, not proof
@@ -80,6 +83,20 @@ a device is offline. Refresh manually. Blocks are by IP, not durable device
 identity: changes of address bypass them, and reassigned addresses inherit a
 block. Review/remove old blocks. IPv6 is not controlled by this version; keep the
 current downstream profile's IPv6 disabled.
+
+### How Customer Isolation, QoS, and Schedules Work
+
+1. **Portal Lockdown**: Devices marked as `Customer` have an `nftables` input rule
+   dropping all packets destined for TCP port 8090 (`drop tcp dport 8090`). Customers
+   cannot load the login screen or admin portal.
+2. **Client-to-Client Isolation**: Customer devices are blocked from forwarding packets
+   to other clients on the local network (`iifname enp1s0 oifname enp1s0 drop`), keeping
+   family laptops, phones, and shared printers private.
+3. **Bandwidth Throttling (QoS)**: Configured speed limits (e.g., 5 Mbps = 625 KB/s)
+   use native `nftables` rate-limiting counters (`limit rate over <X> kbytes/second drop`),
+   preventing customers from monopolizing total internet bandwidth.
+4. **Access Schedules**: Devices with an enabled schedule are automatically evaluated against
+   local system time. During curfew windows, internet access is dropped and marked in the UI.
 
 ### How DNS activity logging works
 

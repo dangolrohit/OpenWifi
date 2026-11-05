@@ -46,6 +46,40 @@ class FirewallTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):helper.main(['block','192.168.16.103'])
             self.assertEqual(json.loads(state.read_text()),[])
 
+    def test_schedule_evaluation(self):
+        from datetime import time as dtime
+        sched_night = {'enabled': True, 'start': '22:00', 'end': '06:00'}
+        self.assertTrue(helper.is_schedule_active(sched_night, dtime(23, 0)))
+        self.assertTrue(helper.is_schedule_active(sched_night, dtime(2, 30)))
+        self.assertFalse(helper.is_schedule_active(sched_night, dtime(12, 0)))
+
+        sched_day = {'enabled': True, 'start': '08:00', 'end': '18:00'}
+        self.assertTrue(helper.is_schedule_active(sched_day, dtime(12, 0)))
+        self.assertFalse(helper.is_schedule_active(sched_day, dtime(20, 0)))
+
+        sched_disabled = {'enabled': False, 'start': '22:00', 'end': '06:00'}
+        self.assertFalse(helper.is_schedule_active(sched_disabled, dtime(23, 0)))
+
+    def test_customer_isolation_and_qos_rules(self):
+        with patch.object(helper, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, '', '')
+            meta = {
+                'devices': {
+                    '192.168.16.105': {
+                        'name': 'Customer Table 1',
+                        'group': 'customer',
+                        'speed_limit': 5,
+                        'schedule': {'enabled': False}
+                    }
+                }
+            }
+            helper.apply_rules({'192.168.16.103'}, meta)
+            script = run.call_args.kwargs['input']
+            self.assertIn('ip saddr @customers tcp dport 8090 counter drop', script)
+            self.assertIn('forward iifname "enp1s0" oifname "enp1s0" ip saddr @customers counter drop', script)
+            self.assertIn('limit rate over 625 kbytes/second', script)
+            self.assertIn('add element inet oshin_dashboard customers { 192.168.16.105 }', script)
+
     def test_dns_log_parsing(self):
         with tempfile.TemporaryDirectory() as td:
             log = Path(td) / 'test-dns.log'
@@ -180,5 +214,22 @@ class HTTPTests(unittest.TestCase):
             st,body,_=self.request('POST','/api/activity/clear',{},token,s['csrf'])
             self.assertEqual(st,200)
             call.assert_called_with('clear_activity')
+    def test_device_update_api(self):
+        token,s=web.new_session(True)
+        with patch.object(web,'helper',return_value={'ok':True}) as call:
+            data={
+                'ip':'192.168.16.105',
+                'name':'Living Room TV',
+                'group':'family',
+                'speed_limit':10,
+                'schedule':{'enabled':True,'start':'22:00','end':'06:00'}
+            }
+            st,body,_=self.request('POST','/api/device/update',data,token,s['csrf'])
+            self.assertEqual(st,200)
+            self.assertEqual(call.call_args[0][0],'set_device')
+            self.assertEqual(call.call_args[0][1],'192.168.16.105')
+            # Test bad payload
+            st,body,_=self.request('POST','/api/device/update',{'ip':'bad'},token,s['csrf'])
+            self.assertEqual(st,400)
 
 if __name__=='__main__':unittest.main()
