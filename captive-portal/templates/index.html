@@ -3,80 +3,61 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>WiFiRouter · Guest Hotspot</title>
+    <meta name="theme-color" content="#ffffff">
+    <title>OshinWiFi</title>
     <style>
-        :root {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            color: #0f172a;
-            background: #f8fafc;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; }
-        .container { width: 100%; max-width: 440px; background: white; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06), 0 8px 10px -6px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #e2e8f0; }
-        .header { background: #0f172a; color: white; padding: 32px 24px; text-align: center; }
-        .logo { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; background: #0284c7; border-radius: 14px; font-size: 26px; margin-bottom: 12px; }
-        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
-        .header p { color: #94a3b8; font-size: 14px; margin-top: 6px; }
-        .content { padding: 28px 24px; }
-        .card { border: 1.5px solid #e2e8f0; border-radius: 14px; padding: 20px; margin-bottom: 18px; transition: all .2s; }
-        .card.highlight { border-color: #0284c7; background: #f0f9ff; }
-        .card h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #0f172a; }
-        .card p { font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 16px; }
-        .plan-meta { display: flex; gap: 10px; margin-bottom: 16px; }
-        .meta-pill { background: #e2e8f0; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; color: #334155; }
-        .card.highlight .meta-pill { background: #e0f2fe; color: #0369a1; }
-        button { width: 100%; padding: 13px; border: 0; border-radius: 10px; background: #0284c7; color: white; font-size: 15px; font-weight: 650; cursor: pointer; transition: background .15s; }
-        button:hover { background: #0369a1; }
-        button:disabled { opacity: 0.6; cursor: wait; }
-        .input-group { display: flex; gap: 8px; margin-top: 10px; }
-        input { flex: 1; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px; font-size: 16px; font-weight: 600; letter-spacing: 2px; text-align: center; }
-        input:focus { outline: none; border-color: #0284c7; }
-        .status { padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 16px; display: none; }
-        .status.error { background: #fef2f2; color: #b91c1c; display: block; }
-        .status.success { background: #f0fdf4; color: #15803d; display: block; }
-        .timer { font-size: 36px; font-weight: 800; color: #0284c7; margin: 12px 0; }
-        .connected-box { text-align: center; padding: 24px 0; }
-        .footer { text-align: center; font-size: 12px; color: #94a3b8; margin-top: 20px; }
+        :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #17212b; background: #f4f6f8; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; min-height: 100svh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+        .container { width: 100%; max-width: 380px; padding: 32px 24px; background: #fff; border: 1px solid #e5e9ee; border-radius: 16px; }
+        .header { text-align: center; margin-bottom: 28px; }
+        h1 { margin: 0; font-size: 30px; letter-spacing: -1px; font-weight: 750; }
+        .header p, .muted { color: #596674; font-size: 14px; line-height: 1.5; }
+        .header p { margin: 8px 0 0; }
+        .free-details { margin: 0 0 12px; text-align: center; color: #596674; font-size: 13px; }
+        button { width: 100%; min-height: 48px; padding: 12px 16px; border: 1px solid #146a57; border-radius: 9px; background: #146a57; color: #fff; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+        button:hover { background: #105744; }
+        button:disabled { opacity: .6; cursor: wait; }
+        button:focus-visible, input:focus-visible { outline: 3px solid #83cbbb; outline-offset: 3px; }
+        .secondary { background: #fff; color: #146a57; }
+        .secondary:hover { background: #f0f7f4; }
+        .divider { display: flex; align-items: center; gap: 14px; color: #697581; font-size: 12px; margin: 24px 0; }
+        .divider::before, .divider::after { content: ""; height: 1px; background: #e5e9ee; flex: 1; }
+        label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+        input { display: block; width: 100%; min-width: 0; min-height: 48px; padding: 12px; margin-bottom: 12px; border: 1px solid #c9d1d8; border-radius: 9px; background: #fff; font: inherit; font-size: 20px; letter-spacing: 6px; text-align: center; }
+        input::placeholder { color: #89939d; }
+        .footer { margin: 20px 0 0; text-align: center; font-size: 12px; line-height: 1.5; color: #697581; }
+        .status { display: none; margin-bottom: 18px; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+        .status.error { display: block; background: #fff1f0; color: #a12922; }
+        .status.success { display: block; background: #ecf8f1; color: #146a57; }
+        .connected-box { text-align: center; }
+        .connected-box h2 { margin: 0 0 8px; font-size: 20px; }
+        .timer { margin: 16px 0 4px; font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -1px; color: #146a57; }
+        .session-details { margin-top: 20px; font-size: 13px; color: #596674; overflow-wrap: anywhere; }
+        [hidden] { display: none !important; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">📶</div>
-            <h1>WiFiRouter Hotspot</h1>
-            <p>Welcome! Choose an access option to connect to the Internet.</p>
+    <main class="container">
+        <header class="header">
+            <h1>OshinWiFi</h1>
+            <p>Welcome. Choose how to connect.</p>
+        </header>
+        <div id="portal-content">
+            <div id="status-box" class="status" role="status" aria-live="polite"></div>
+            <section id="starter-card" aria-label="Free guest access">
+                <p class="free-details">Free · 30 minutes · 1 Mbps Limit</p>
+                <button id="starter-btn" type="button">Continue as Guest</button>
+                <div class="divider" aria-hidden="true">or</div>
+            </section>
+            <form id="voucher-form">
+                <label for="voucher-code">6-digit access code</label>
+                <input type="text" id="voucher-code" maxlength="6" minlength="6" inputmode="numeric" pattern="[0-9]{6}" placeholder="000000" autocomplete="off" required>
+                <button type="submit" id="voucher-btn" class="secondary">Continue with Access Code</button>
+            </form>
+            <p class="footer">Have a code? Use it for your plan's time and speed.</p>
         </div>
-        <div class="content" id="portal-content">
-            <div id="status-box" class="status"></div>
-
-            <!-- Starter Plan Card -->
-            <div class="card highlight" id="starter-card">
-                <h2>Starter Plan (Free)</h2>
-                <div class="plan-meta">
-                    <span class="meta-pill">⏱ 30 Minutes</span>
-                    <span class="meta-pill">⚡ 1 Mbps Limit</span>
-                </div>
-                <p>Free light web access. Tap below to agree to fair network usage and get 30 minutes online at 1 Mbps. After your free session ends, enter an access code to continue.</p>
-                <button id="starter-btn">Continue as Guest</button>
-            </div>
-
-            <!-- Access Voucher Card -->
-            <div class="card" id="voucher-card">
-                <h2>Continue with Access Code</h2>
-                <p>Enter the 6-digit access code provided by the administrator for extended high-speed access.</p>
-                <form id="voucher-form">
-                    <div class="input-group">
-                        <input type="text" id="voucher-code" maxlength="6" minlength="6" inputmode="numeric" pattern="[0-9]{6}" placeholder="000000" autocomplete="off" required>
-                        <button type="submit" id="voucher-btn" style="width: auto; padding: 0 20px;">Continue</button>
-                    </div>
-                </form>
-            </div>
-
-            <div class="footer">
-                Protected by WiFiRouter V2 Gateway Security
-            </div>
-        </div>
-    </div>
+    </main>
 
     <script>
         const statusBox = document.getElementById('status-box');
@@ -111,15 +92,14 @@
             
             content.innerHTML = `
                 <div class="connected-box">
-                    <div style="font-size: 52px; margin-bottom: 12px;">✅</div>
-                    <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 6px;">You Are Online!</h2>
-                    <p style="color: #64748b; font-size: 14px;">Your Internet session is active and monitored under fair usage.</p>
-                    <div class="timer" id="time-left">--:--</div>
-                    <div style="font-size: 13px; color: #64748b; margin-top: 8px;">
-                        Plan: <b>${session.plan_id.toUpperCase()}</b> · Limit: <b>${session.speed_limit_mbps ? session.speed_limit_mbps + ' Mbps' : 'Standard'}</b>
-                    </div>
+                    <h2>Access enabled</h2>
+                    <div class="timer" id="time-left" role="timer" aria-label="Time remaining">--:--</div>
+                    <p class="muted">Time remaining</p>
+                    <p class="session-details" id="session-details"></p>
                 </div>
             `;
+            document.getElementById('session-details').textContent =
+                `${session.plan_id === 'starter' ? 'Guest' : session.plan_id} · ${session.speed_limit_mbps ? session.speed_limit_mbps + ' Mbps' : 'Standard speed'}`;
 
             function updateTimer() {
                 const now = Date.now();
