@@ -45,23 +45,28 @@ local self-signed certificate. Verify the SHA-256 fingerprint printed by the
 installer before accepting the browser certificate warning. Keep the portal
 private; do not expose it to the public internet.
 
-## Pages in version 2
+## Pages in version 2.1
 
 - Dashboard: discovered addresses, blocked count, gateway information.
 - Wifi Settings: configured network details and link to the router admin UI.
   Direct SSID/password editing requires a router integration not yet provided.
-- Connected Device: discovered IP/MAC addresses, search, block/unblock.
+- Connected Device: discovered IP/MAC addresses, search, block/unblock, and direct
+  "Activity" link to inspect queries for that specific device.
 - Device Filtering: current blocked addresses and unblock controls.
 - Usages: real aggregate enp1s0 RX/TX counters and average rate between refreshes;
   includes local traffic, not per-user internet totals. No monthly history yet.
+- Activity Logs: real-time DNS query monitoring recording website and domain requests
+  (e.g., youtube.com, instagram.com) made by connected devices. Filterable by client
+  device IP, searchable by domain name, and clearable by the administrator.
 - User Logs: last 300 admin sign-in/out and filtering events in memory; resets
-  at service restart. This is not website/request logging.
+  at service restart. This is admin portal audit logging.
 - Settings: browser-local automatic refresh preference and configuration details.
 - Logout: invalidates the current session and returns to the login page.
 
 ## What it does
 
 - Password-protected device list drawn from Ubuntu's IPv4 neighbour cache.
+- Website and domain activity tracking via gateway DNS query logging.
 - IPv4 block/unblock for selected addresses. Changes persist across reboot.
 - Blocks both incoming and outgoing forwarded IPv4 packets for the selected
   address on enp1s0. Applies to all routed destinations, including the upstream LAN.
@@ -74,8 +79,21 @@ definitive list of Wi-Fi connections. STALE is a neighbour-cache state, not proo
 a device is offline. Refresh manually. Blocks are by IP, not durable device
 identity: changes of address bypass them, and reassigned addresses inherit a
 block. Review/remove old blocks. IPv6 is not controlled by this version; keep the
-current downstream profile's IPv6 disabled. No transparent proxy or inspection
-of browsing contents is installed.
+current downstream profile's IPv6 disabled.
+
+### How DNS activity logging works
+
+Modern web browsing uses HTTPS/TLS encryption. Routers cannot inspect encrypted
+web page contents, search queries, passwords, or messages without installing a
+custom root TLS certificate on each client device. However, devices send DNS queries
+to resolve domain names (e.g. `youtube.com`, `instagram.com`).
+
+The gateway captures these domain lookups via NetworkManager's shared dnsmasq service
+configured at `/etc/NetworkManager/dnsmasq-shared.d/01-activity-log.conf` logging to
+`/var/log/oshin-dns.log`. The restricted helper (`/usr/local/sbin/oshin-fw activity`)
+parses recent queries and provides them to the authenticated dashboard. Devices with
+explicit "Private DNS" (DNS-over-TLS on port 853 or DNS-over-HTTPS) bypass standard
+gateway DNS.
 
 ## How privilege and firewall changes work
 

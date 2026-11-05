@@ -15,7 +15,7 @@ SESSIONS={}
 FAILURES={}
 LOCK=threading.RLock()
 EVENTS=deque(maxlen=300)
-PAGES={'/','/dashboard','/wifi','/devices','/filtering','/usages','/logs','/settings'}
+PAGES={'/','/dashboard','/wifi','/devices','/filtering','/usages','/activity','/logs','/settings'}
 
 def audit(action,client,target=''):
     with LOCK: EVENTS.appendleft({'time':time.time(),'action':action,'client':client,'target':target})
@@ -102,16 +102,36 @@ class Handler(BaseHTTPRequestHandler):
             return
         token,s=self.auth()
         if not s:return
-        if self.path in PAGES:self.respond(200,(ROOT/'portal.html').read_text().replace('__CSRF__',s['csrf']),'text/html')
-        elif self.path=='/api/devices':
+        clean_path = self.path.split('?')[0]
+        if clean_path in PAGES:self.respond(200,(ROOT/'portal.html').read_text().replace('__CSRF__',s['csrf']),'text/html')
+        elif clean_path=='/api/devices':
             try:self.respond(200,{'devices':devices(),'client':self.client_address[0]})
             except Exception as e:self.respond(503,{'error':str(e)})
-        elif self.path=='/api/usage':
+        elif clean_path=='/api/usage':
             try:self.respond(200,usage())
             except Exception:self.respond(503,{'error':'Interface counters unavailable'})
-        elif self.path=='/api/logs':
+        elif clean_path=='/api/logs':
             with LOCK:rows=list(EVENTS)
             self.respond(200,{'events':rows})
+        elif clean_path=='/api/activity':
+            target=None
+            if '?' in self.path:
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                ip_param = qs.get('ip', [None])[0]
+                if ip_param and ip_param != 'all':
+                    try:
+                        target = str(ipaddress.IPv4Address(ip_param))
+                    except ValueError:
+                        self.respond(400, {'error': 'Invalid IP address'})
+                        return
+            try:
+                res = helper('activity', target) if target else helper('activity')
+                res['client'] = self.client_address[0]
+                res['devices'] = devices()
+                self.respond(200, res)
+            except Exception as e:
+                self.respond(503, {'error': str(e)})
         else:self.respond(404,{'error':'Not found'})
     def do_POST(self):
         if not self.valid_host():return
@@ -149,6 +169,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/api/logout':
             with LOCK:SESSIONS.pop(token,None)
             audit('Signed out',self.client_address[0]);self.respond(200,{'ok':True},cookie='');return
+        if self.path=='/api/activity/clear':
+            try:
+                res=helper('clear_activity')
+                audit('Cleared DNS activity logs',self.client_address[0])
+                self.respond(200,res)
+            except Exception as e:self.respond(503,{'error':str(e)})
+            return
         if self.path=='/api/action':
             try:
                 if data.get('action') not in ('block','unblock'):raise ValueError()

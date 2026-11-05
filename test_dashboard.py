@@ -3,12 +3,16 @@ import hashlib
 import http.client
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+
+if not hasattr(os, 'geteuid'):
+    os.geteuid = lambda: 0
 
 def load(name):
     spec=importlib.util.spec_from_file_location(name,Path(__file__).with_name(name+'.py'))
@@ -42,9 +46,50 @@ class FirewallTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):helper.main(['block','192.168.16.103'])
             self.assertEqual(json.loads(state.read_text()),[])
 
+    def test_dns_log_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / 'test-dns.log'
+            log.write_text(
+                "Nov  5 22:42:01 dnsmasq[1832]: query[A] www.google.com from 192.168.16.103\n"
+                "Nov  5 22:42:02 dnsmasq[1832]: reply www.google.com is 142.250.190.36\n"
+                "Nov  5 22:42:03 dnsmasq[1832]: query[AAAA] instagram.com from 192.168.16.105\n"
+                "Nov  5 22:42:04 dnsmasq[1832]: query[HTTPS] youtube.com from 192.168.16.103\n"
+            )
+            all_q = helper.parse_dns_log(log)
+            self.assertEqual(len(all_q), 3)
+            self.assertEqual(all_q[0]['domain'], 'youtube.com')
+            self.assertEqual(all_q[0]['type'], 'HTTPS')
+            self.assertEqual(all_q[0]['client'], '192.168.16.103')
+
+            filtered = helper.parse_dns_log(log, filter_ip='192.168.16.105')
+            self.assertEqual(len(filtered), 1)
+            self.assertEqual(filtered[0]['domain'], 'instagram.com')
+
+            limited = helper.parse_dns_log(log, limit=1)
+            self.assertEqual(len(limited), 1)
+            self.assertEqual(limited[0]['domain'], 'youtube.com')
+
+    def test_activity_helper_actions(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / 'oshin-dns.log'
+            log.write_text("Nov  5 22:42:01 dnsmasq[1832]: query[A] example.org from 192.168.16.103\n")
+            with patch.object(helper, 'DNS_LOG', log), patch.object(helper.os, 'geteuid', return_value=0):
+                import io
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['activity'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertEqual(len(res['queries']), 1)
+                    self.assertEqual(res['queries'][0]['domain'], 'example.org')
+
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['clear_activity'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                self.assertEqual(log.read_text(), '')
+
     def test_bad_actions_never_run(self):
         with patch.object(helper.os,'geteuid',return_value=0),patch.object(helper,'run') as run:
-            for args in [[],['shell'],['block'],['status','extra'],['block','192.168.16.103','extra']]:
+            for args in [[],['shell'],['block'],['status','extra'],['block','192.168.16.103','extra'],['clear_activity','extra']]:
                 with self.assertRaises(ValueError):helper.main(args)
             run.assert_not_called()
 
@@ -75,7 +120,7 @@ class HTTPTests(unittest.TestCase):
     def test_all_private_pages_and_apis(self):
         for path in web.PAGES:
             self.assertEqual(self.request('GET',path)[0],303)
-        for path in ['/api/devices','/api/usage','/api/logs']:
+        for path in ['/api/devices','/api/usage','/api/logs','/api/activity']:
             self.assertEqual(self.request('GET',path)[0],401)
     def test_login_rotation_logout_revocation(self):
         token,s=web.new_session()
@@ -117,5 +162,23 @@ class HTTPTests(unittest.TestCase):
     def test_anonymous_cannot_mutate(self):
         token,s=web.new_session()
         self.assertEqual(self.request('POST','/api/action',{'action':'block','ip':'192.168.16.103'},token,s['csrf'])[0],401)
+        self.assertEqual(self.request('POST','/api/activity/clear',{},token,s['csrf'])[0],401)
+    def test_activity_api(self):
+        token,s=web.new_session(True)
+        with patch.object(web,'helper',return_value={'queries':[],'log_exists':True}) as call, patch.object(web,'devices',return_value=[]):
+            st,body,_=self.request('GET','/api/activity',token=token)
+            self.assertEqual(st,200)
+            call.assert_called_with('activity')
+            st,body,_=self.request('GET','/api/activity?ip=192.168.16.103',token=token)
+            self.assertEqual(st,200)
+            call.assert_called_with('activity','192.168.16.103')
+            st,body,_=self.request('GET','/api/activity?ip=bad_ip',token=token)
+            self.assertEqual(st,400)
+    def test_clear_activity_api(self):
+        token,s=web.new_session(True)
+        with patch.object(web,'helper',return_value={'ok':True}) as call:
+            st,body,_=self.request('POST','/api/activity/clear',{},token,s['csrf'])
+            self.assertEqual(st,200)
+            call.assert_called_with('clear_activity')
 
 if __name__=='__main__':unittest.main()

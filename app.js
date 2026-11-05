@@ -1,41 +1,133 @@
 'use strict';
-const csrf=document.querySelector('meta[name="csrf-token"]').content;
-const message=document.getElementById('message');
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const bytes=n=>{if(n<1024)return n+' B';let i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),4);return (n/1024**i).toFixed(2)+' '+['B','KB','MB','GB','TB'][i];};
-async function api(path,data){const opts={cache:'no-store'};if(data!==undefined)Object.assign(opts,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(data)});const r=await fetch(path,opts);const d=await r.json();if(r.status===401&&path!='/api/login'){location.replace('/login');throw Error('Session ended');}if(!r.ok)throw Error(d.error||'Request failed');return d;}
-function error(e){message.textContent=e.message;message.className='status error';}
-const login=document.getElementById('login-form');
-if(login){login.onsubmit=async e=>{e.preventDefault();const b=login.querySelector('button');b.disabled=true;message.textContent='Signing in…';try{await api('/api/login',{username:login.username.value,password:login.password.value});location.replace('/dashboard');}catch(e){error(e);b.disabled=false;}};}
-else{
-const pages={dashboard:['Dashboard','A clear view of your network and access controls.'],wifi:['Wifi Settings','Manage the access point and wireless configuration.'],devices:['Connected Device','Review devices discovered by your Ubuntu gateway.'],filtering:['Device Filtering','Control IPv4 internet access by device address.'],usages:['Usages','Network traffic measured on the access-point interface.'],logs:['User Logs','Review administrator activity in this portal.'],settings:['Settings','Portal preferences and connection details.']};
-const key=location.pathname.split('/')[1]||'dashboard';const [title,subtitle]=pages[key]||pages.dashboard;
-document.title=title+' · OshinWiFi';document.getElementById('title').textContent=title;document.getElementById('crumb').textContent=title;document.getElementById('subtitle').textContent=subtitle;
-document.querySelector(`nav a[href="/${pages[key]?key:'dashboard'}"]`).classList.add('active');
-const menu=document.getElementById('menu');menu.onclick=()=>{const open=document.getElementById('sidebar').classList.toggle('open');menu.setAttribute('aria-expanded',String(open));};
-document.getElementById('logout').onclick=async()=>{try{await api('/api/logout',{});location.replace('/login');}catch(e){error(e);}};
-const page=document.getElementById('page');let loading=false,previousUsage=null,timer=null;
-const detail=(name,value)=>`<div class="detail"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`;
-const card=(label,value,foot)=>`<div class="card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(foot)}</small></div>`;
-function deviceTable(data,filtered=false){const rows=filtered?data.devices.filter(x=>x.blocked):data.devices;return `<div class="tablewrap"><table><thead><tr><th>IP address</th><th>MAC address</th><th>Neighbour state</th><th>Access rule</th><th>Action</th></tr></thead><tbody>${rows.map(x=>`<tr data-search="${esc(x.ip+' '+x.mac)}"><td><strong>${esc(x.ip)}</strong>${x.ip===data.client?' <span class="muted">(you)</span>':''}</td><td>${esc(x.mac||'Unknown')}</td><td>${esc(x.state)}</td><td><span class="badge ${x.blocked?'off':''}">${x.blocked?'Blocked':'No block rule'}</span></td><td><button class="${x.blocked?'':'danger'}" data-action="${x.blocked?'unblock':'block'}" data-ip="${esc(x.ip)}" ${x.ip===data.client&&!x.blocked?'disabled':''}>${x.blocked?'Unblock':'Block'}</button></td></tr>`).join('')}</tbody></table>${rows.length?'':'<div class="empty">'+(filtered?'No blocked addresses.':'No devices discovered yet. Connect a device and browse, then refresh.')+'</div>'}</div>`;}
-function wireActions(){page.querySelectorAll('[data-action]').forEach(b=>{b.onclick=async()=>{if(!confirm(`${b.dataset.action==='block'?'Block':'Unblock'} IPv4 internet access for ${b.dataset.ip}?`))return;b.disabled=true;try{await api('/api/action',{action:b.dataset.action,ip:b.dataset.ip});await load();}catch(e){error(e);b.disabled=false;}};});const search=document.getElementById('search');if(search)search.oninput=()=>{page.querySelectorAll('tr[data-search]').forEach(row=>{row.hidden=!row.dataset.search.toLowerCase().includes(search.value.toLowerCase());});};}
-async function load(){if(loading)return;loading=true;message.className='status';message.textContent='Updating…';try{
-if(['dashboard','devices','filtering'].includes(key)){
-const data=await api('/api/devices');const blocked=data.devices.filter(x=>x.blocked).length;
-if(key==='dashboard')page.innerHTML=`<div class="cards">${card('Discovered addresses',data.devices.length,'Neighbour cache + saved blocks')}${card('Blocked addresses',blocked,'IPv4 access controls')}${card('Gateway','192.168.16.2','Ubuntu · enp1s0')}</div><div class="split"><section class="panel"><h2>Network details</h2>${detail('Wireless network','OshinWiFi (configured name)')}${detail('Access point','192.168.16.1')}${detail('Management','HTTPS · Port 8090')}</section><section class="panel"><h2>Access controls</h2><p>Manage internet access for devices using your gateway.</p><a class="button" href="/filtering">Manage filtering →</a><p class="muted">Rules follow IP addresses, not device identities.</p></section></div><section class="panel"><h2>Device overview</h2>${deviceTable(data)}</section>`;
-else page.innerHTML=`<div class="notice">${key==='filtering'?'Blocks apply to routed IPv4 traffic. Wi-Fi association and local communication remain available. A changed IP can bypass a rule.':'This is Ubuntu’s neighbour cache, not an exact Wi-Fi association list. STALE means previously seen; it does not prove a device is offline.'}</div><section class="panel"><h2>${key==='filtering'?'Blocked addresses':'Discovered devices'}</h2><input class="search" id="search" placeholder="Search IP or MAC address" aria-label="Search devices">${deviceTable(data,key==='filtering')}${key==='filtering'?'<p class="muted">To block another device, open <a href="/devices">Connected Device</a>.</p>':''}</section>`;wireActions();
-}else if(key==='wifi'){
-page.innerHTML=`<section class="panel"><h2>Wireless access point</h2>${detail('Router','LB-Link BL-WR450H')}${detail('Mode','AP mode — configured during setup')}${detail('Wi-Fi name','OshinWiFi — configured during setup')}${detail('Management address','192.168.16.1')}<div class="notice">Direct router integration is not configured. Change the Wi-Fi name, password, channel, and guest settings in the router’s own admin page.</div><a class="button" href="http://192.168.16.1" target="_blank" rel="noopener noreferrer">Open router settings ↗</a></section>`;
-}else if(key==='usages'){
-const u=await api('/api/usage');let speed='Collecting';if(previousUsage&&u.at>previousUsage.at&&u.upload>=previousUsage.upload&&u.download>=previousUsage.download)speed=bytes((u.upload+u.download-previousUsage.upload-previousUsage.download)/(u.at-previousUsage.at))+'/s';previousUsage=u;
-page.innerHTML=`<div class="cards">${card('Received from Wi-Fi side',bytes(u.upload),'Interface RX total')}${card('Sent to Wi-Fi side',bytes(u.download),'Interface TX total')}${card('Combined traffic rate',speed,'Average between refreshes')}</div><section class="panel"><h2>What these totals measure</h2><p>These are real aggregate Ethernet-interface counters. They include local traffic and dashboard requests, and reset when the interface counters reset. They are not per-device or monthly internet totals.</p><div class="notice">Per-device usage history has not been enabled. No fabricated traffic charts or usage records are shown.</div></section>`;
-}else if(key==='logs'){
-const d=await api('/api/logs');page.innerHTML=`<div class="notice">Administrator sign-ins, sign-outs, and filtering actions only. Browsing history and HTTP/HTTPS requests are not collected. The latest 300 events are kept in memory and reset when the service restarts.</div><section class="panel"><h2>Recent administrator activity</h2><div class="tablewrap"><table><thead><tr><th>Time</th><th>Activity</th><th>Admin address</th><th>Target</th></tr></thead><tbody>${d.events.map(e=>`<tr><td>${esc(new Date(e.time*1000).toLocaleString())}</td><td>${esc(e.action)}</td><td>${esc(e.client)}</td><td>${esc(e.target||'—')}</td></tr>`).join('')}</tbody></table>${d.events.length?'':'<div class="empty">No events in this service session.</div>'}</div></section>`;
-}else if(key==='settings'){
-page.innerHTML=`<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username','admin')}${detail('Idle timeout','30 minutes')}${detail('Maximum session','8 hours')}${detail('Authentication','Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway','192.168.16.2/24')}${detail('Downstream interface','enp1s0')}${detail('Router','192.168.16.1')}${detail('Portal version','2.0')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`;let value='0';try{value=localStorage.getItem('oshin-refresh')||'0';}catch{}const select=document.getElementById('interval');select.value=value;select.onchange=()=>{try{localStorage.setItem('oshin-refresh',select.value);}catch{}schedule();};
-}
-message.textContent='Updated '+new Date().toLocaleTimeString();
-}catch(e){error(e);}finally{loading=false;}}
-function schedule(){clearInterval(timer);let seconds=0;try{seconds=Number(localStorage.getItem('oshin-refresh'));}catch{}if([10,30,60].includes(seconds)&&!['settings','wifi'].includes(key))timer=setInterval(()=>{if(!document.hidden)load();},seconds*1000);}
-document.getElementById('refresh').onclick=load;window.addEventListener('pageshow',e=>{if(e.persisted)location.reload();});load();schedule();
+const csrf = document.querySelector('meta[name="csrf-token"]').content;
+const message = document.getElementById('message');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const bytes = n => { if (n < 1024) return n + ' B'; let i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 4); return (n / 1024 ** i).toFixed(2) + ' ' + ['B', 'KB', 'MB', 'GB', 'TB'][i]; };
+async function api(path, data) { const opts = { cache: 'no-store' }; if (data !== undefined) Object.assign(opts, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(data) }); const r = await fetch(path, opts); const d = await r.json(); if (r.status === 401 && path != '/api/login') { location.replace('/login'); throw Error('Session ended'); } if (!r.ok) throw Error(d.error || 'Request failed'); return d; }
+function error(e) { message.textContent = e.message; message.className = 'status error'; }
+const login = document.getElementById('login-form');
+if (login) { login.onsubmit = async e => { e.preventDefault(); const b = login.querySelector('button'); b.disabled = true; message.textContent = 'Signing in…'; try { await api('/api/login', { username: login.username.value, password: login.password.value }); location.replace('/dashboard'); } catch (e) { error(e); b.disabled = false; } }; }
+else {
+    const pages = {
+        dashboard: ['Dashboard', 'A clear view of your network and access controls.'],
+        wifi: ['Wifi Settings', 'Manage the access point and wireless configuration.'],
+        devices: ['Connected Device', 'Review devices discovered by your Ubuntu gateway.'],
+        filtering: ['Device Filtering', 'Control IPv4 internet access by device address.'],
+        usages: ['Usages', 'Network traffic measured on the access-point interface.'],
+        activity: ['Activity Logs', 'Monitor website and domain requests from connected devices.'],
+        logs: ['User Logs', 'Review administrator activity in this portal.'],
+        settings: ['Settings', 'Portal preferences and connection details.']
+    };
+    const key = location.pathname.split('/')[1] || 'dashboard'; const [title, subtitle] = pages[key] || pages.dashboard;
+    document.title = title + ' · OshinWiFi'; document.getElementById('title').textContent = title; document.getElementById('crumb').textContent = title; document.getElementById('subtitle').textContent = subtitle;
+    const activeNav = document.querySelector(`nav a[href="/${pages[key] ? key : 'dashboard'}"]`);
+    if (activeNav) activeNav.classList.add('active');
+    const menu = document.getElementById('menu'); menu.onclick = () => { const open = document.getElementById('sidebar').classList.toggle('open'); menu.setAttribute('aria-expanded', String(open)); };
+    document.getElementById('logout').onclick = async () => { try { await api('/api/logout', {}); location.replace('/login'); } catch (e) { error(e); } };
+    const page = document.getElementById('page'); let loading = false, previousUsage = null, timer = null;
+    const detail = (name, value) => `<div class="detail"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`;
+    const card = (label, value, foot) => `<div class="card"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(foot)}</small></div>`;
+    function deviceTable(data, filtered = false) {
+        const rows = filtered ? data.devices.filter(x => x.blocked) : data.devices;
+        return `<div class="tablewrap"><table><thead><tr><th>IP address</th><th>MAC address</th><th>Neighbour state</th><th>Access rule</th><th>Action</th></tr></thead><tbody>${rows.map(x => `<tr data-search="${esc(x.ip + ' ' + x.mac)}"><td><strong>${esc(x.ip)}</strong>${x.ip === data.client ? ' <span class="muted">(you)</span>' : ''}</td><td>${esc(x.mac || 'Unknown')}</td><td>${esc(x.state)}</td><td><span class="badge ${x.blocked ? 'off' : ''}">${x.blocked ? 'Blocked' : 'No block rule'}</span></td><td><div class="row-actions"><a class="button secondary small" href="/activity?ip=${esc(x.ip)}" title="View activity for ${esc(x.ip)}">Activity</a><button class="${x.blocked ? '' : 'danger'} small" data-action="${x.blocked ? 'unblock' : 'block'}" data-ip="${esc(x.ip)}" ${x.ip === data.client && !x.blocked ? 'disabled' : ''}>${x.blocked ? 'Unblock' : 'Block'}</button></div></td></tr>`).join('')}</tbody></table>${rows.length ? '' : '<div class="empty">' + (filtered ? 'No blocked addresses.' : 'No devices discovered yet. Connect a device and browse, then refresh.') + '</div>'}</div>`;
+    }
+    function wireActions() {
+        page.querySelectorAll('[data-action]').forEach(b => {
+            b.onclick = async () => {
+                if (!confirm(`${b.dataset.action === 'block' ? 'Block' : 'Unblock'} IPv4 internet access for ${b.dataset.ip}?`)) return;
+                b.disabled = true;
+                try { await api('/api/action', { action: b.dataset.action, ip: b.dataset.ip }); await load(); } catch (e) { error(e); b.disabled = false; }
+            };
+        });
+        const search = document.getElementById('search');
+        if (search) search.oninput = () => {
+            page.querySelectorAll('tr[data-search]').forEach(row => {
+                row.hidden = !row.dataset.search.toLowerCase().includes(search.value.toLowerCase());
+            });
+        };
+    }
+    async function load() {
+        if (loading) return; loading = true; message.className = 'status'; message.textContent = 'Updating…'; try {
+            if (['dashboard', 'devices', 'filtering'].includes(key)) {
+                const data = await api('/api/devices'); const blocked = data.devices.filter(x => x.blocked).length;
+                if (key === 'dashboard') page.innerHTML = `<div class="cards">${card('Discovered addresses', data.devices.length, 'Neighbour cache + saved blocks')}${card('Blocked addresses', blocked, 'IPv4 access controls')}${card('Gateway', '192.168.16.2', 'Ubuntu · enp1s0')}</div><div class="split"><section class="panel"><h2>Network details</h2>${detail('Wireless network', 'OshinWiFi (configured name)')}${detail('Access point', '192.168.16.1')}${detail('Management', 'HTTPS · Port 8090')}</section><section class="panel"><h2>Access controls</h2><p>Manage internet access for devices using your gateway.</p><a class="button" href="/filtering">Manage filtering →</a><p class="muted">Rules follow IP addresses, not device identities.</p></section></div><section class="panel"><h2>Device overview</h2>${deviceTable(data)}</section>`;
+                else page.innerHTML = `<div class="notice">${key === 'filtering' ? 'Blocks apply to routed IPv4 traffic. Wi-Fi association and local communication remain available. A changed IP can bypass a rule.' : 'This is Ubuntu’s neighbour cache, not an exact Wi-Fi association list. STALE means previously seen; it does not prove a device is offline.'}</div><section class="panel"><h2>${key === 'filtering' ? 'Blocked addresses' : 'Discovered devices'}</h2><input class="search" id="search" placeholder="Search IP or MAC address" aria-label="Search devices">${deviceTable(data, key === 'filtering')}${key === 'filtering' ? '<p class="muted">To block another device, open <a href="/devices">Connected Device</a>.</p>' : ''}</section>`;
+                wireActions();
+            } else if (key === 'wifi') {
+                page.innerHTML = `<section class="panel"><h2>Wireless access point</h2>${detail('Router', 'LB-Link BL-WR450H')}${detail('Mode', 'AP mode — configured during setup')}${detail('Wi-Fi name', 'OshinWiFi — configured during setup')}${detail('Management address', '192.168.16.1')}<div class="notice">Direct router integration is not configured. Change the Wi-Fi name, password, channel, and guest settings in the router’s own admin page.</div><a class="button" href="http://192.168.16.1" target="_blank" rel="noopener noreferrer">Open router settings ↗</a></section>`;
+            } else if (key === 'usages') {
+                const u = await api('/api/usage'); let speed = 'Collecting'; if (previousUsage && u.at > previousUsage.at && u.upload >= previousUsage.upload && u.download >= previousUsage.download) speed = bytes((u.upload + u.download - previousUsage.upload - previousUsage.download) / (u.at - previousUsage.at)) + '/s'; previousUsage = u;
+                page.innerHTML = `<div class="cards">${card('Received from Wi-Fi side', bytes(u.upload), 'Interface RX total')}${card('Sent to Wi-Fi side', bytes(u.download), 'Interface TX total')}${card('Combined traffic rate', speed, 'Average between refreshes')}</div><section class="panel"><h2>What these totals measure</h2><p>These are real aggregate Ethernet-interface counters. They include local traffic and dashboard requests, and reset when the interface counters reset. They are not per-device or monthly internet totals.</p><div class="notice">Per-device usage history has not been enabled. No fabricated traffic charts or usage records are shown.</div></section>`;
+            } else if (key === 'activity') {
+                const urlParams = new URLSearchParams(location.search);
+                const filterIp = urlParams.get('ip') || '';
+                const d = await api('/api/activity' + (filterIp ? `?ip=${encodeURIComponent(filterIp)}` : ''));
+                const total = d.queries ? d.queries.length : 0;
+                const uniqueClients = d.queries ? new Set(d.queries.map(q => q.client)).size : 0;
+                page.innerHTML = `
+                <div class="cards">
+                    ${card('Recorded queries', total, filterIp ? 'Filtered for ' + filterIp : 'All client devices')}
+                    ${card('Active querying devices', uniqueClients, 'Devices seen in DNS log')}
+                    ${card('DNS logger status', d.log_exists ? 'Active' : 'Standby', d.log_exists ? '/var/log/oshin-dns.log' : 'Awaiting DNS lookups')}
+                </div>
+                <div class="notice">DNS query logs record domain name lookups (e.g. youtube.com, instagram.com) routed through your gateway. Modern web connections use TLS/HTTPS encryption, so webpage contents, search queries, passwords, and chat messages remain encrypted. Devices with 'Private DNS' (DoH / DoT) enabled bypass local DNS logging.</div>
+                <section class="panel">
+                    <h2>Device browsing activity</h2>
+                    <div class="activity-toolbar">
+                        <select id="activity-device" aria-label="Select device">
+                            <option value="">All Connected Devices (${(d.devices || []).length})</option>
+                            ${(d.devices || []).map(dev => `<option value="${esc(dev.ip)}" ${filterIp === dev.ip ? 'selected' : ''}>${esc(dev.ip)}${dev.mac ? ' (' + esc(dev.mac) + ')' : ''}${dev.ip === d.client ? ' (you)' : ''}</option>`).join('')}
+                        </select>
+                        <input class="search" id="activity-search" placeholder="Filter by domain or IP (e.g. youtube, google)" aria-label="Search activity">
+                        <button class="secondary" id="clear-activity">Clear activity history</button>
+                    </div>
+                    <div class="tablewrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Client Device</th>
+                                    <th>Domain / Website</th>
+                                    <th>Query Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="activity-rows">
+                                ${(d.queries || []).map(q => `<tr data-search="${esc(q.domain + ' ' + q.client)}"><td>${esc(q.time || 'Recent')}</td><td><strong>${esc(q.client)}</strong>${q.client === d.client ? ' <span class="muted">(you)</span>' : ''}</td><td><span class="domain-pill">${esc(q.domain)}</span></td><td><span class="badge">${esc(q.type)}</span></td></tr>`).join('')}
+                            </tbody>
+                        </table>
+                        ${total ? '' : '<div class="empty">No domain lookups recorded yet. Connect a device to Wi-Fi and browse websites, then refresh.</div>'}
+                    </div>
+                </section>`;
+                const devSelect = document.getElementById('activity-device');
+                if (devSelect) devSelect.onchange = () => {
+                    const val = devSelect.value;
+                    const newUrl = val ? `/activity?ip=${encodeURIComponent(val)}` : '/activity';
+                    history.pushState(null, '', newUrl);
+                    load();
+                };
+                const actSearch = document.getElementById('activity-search');
+                if (actSearch) actSearch.oninput = () => {
+                    const term = actSearch.value.toLowerCase();
+                    document.querySelectorAll('#activity-rows tr[data-search]').forEach(row => {
+                        row.hidden = !row.dataset.search.toLowerCase().includes(term);
+                    });
+                };
+                const clearBtn = document.getElementById('clear-activity');
+                if (clearBtn) clearBtn.onclick = async () => {
+                    if (!confirm('Clear all recorded DNS activity logs?')) return;
+                    clearBtn.disabled = true;
+                    try { await api('/api/activity/clear', {}); await load(); } catch (e) { error(e); clearBtn.disabled = false; }
+                };
+            } else if (key === 'logs') {
+                const d = await api('/api/logs'); page.innerHTML = `<div class="notice">Administrator sign-ins, sign-outs, and filtering actions only. To view website domains looked up by Wi-Fi clients, see <a href="/activity">Activity Logs</a>. The latest 300 events are kept in memory and reset when the service restarts.</div><section class="panel"><h2>Recent administrator activity</h2><div class="tablewrap"><table><thead><tr><th>Time</th><th>Activity</th><th>Admin address</th><th>Target</th></tr></thead><tbody>${d.events.map(e => `<tr><td>${esc(new Date(e.time * 1000).toLocaleString())}</td><td>${esc(e.action)}</td><td>${esc(e.client)}</td><td>${esc(e.target || '—')}</td></tr>`).join('')}</tbody></table>${d.events.length ? '' : '<div class="empty">No events in this service session.</div>'}</div></section>`;
+            } else if (key === 'settings') {
+                page.innerHTML = `<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, activity, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username', 'admin')}${detail('Idle timeout', '30 minutes')}${detail('Maximum session', '8 hours')}${detail('Authentication', 'Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway', '192.168.16.2/24')}${detail('Downstream interface', 'enp1s0')}${detail('Router', '192.168.16.1')}${detail('Portal version', '2.1')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`; let value = '0'; try { value = localStorage.getItem('oshin-refresh') || '0'; } catch { } const select = document.getElementById('interval'); select.value = value; select.onchange = () => { try { localStorage.setItem('oshin-refresh', select.value); } catch { } schedule(); };
+            }
+            message.textContent = 'Updated ' + new Date().toLocaleTimeString();
+        } catch (e) { error(e); } finally { loading = false; }
+    }
+    function schedule() { clearInterval(timer); let seconds = 0; try { seconds = Number(localStorage.getItem('oshin-refresh')); } catch { } if ([10, 30, 60].includes(seconds) && !['settings', 'wifi'].includes(key)) timer = setInterval(() => { if (!document.hidden) load(); }, seconds * 1000); }
+    document.getElementById('refresh').onclick = load; window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+    window.addEventListener('popstate', () => { load(); });
+    load(); schedule();
 }

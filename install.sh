@@ -28,6 +28,16 @@ useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin 
 install -d -m 755 /opt/oshin-dashboard
 install -d -m 750 -o root -g oshin-dashboard /etc/oshin-dashboard
 install -d -m 700 /var/lib/oshin-firewall
+install -d -m 755 /etc/NetworkManager/dnsmasq-shared.d
+cat > /etc/NetworkManager/dnsmasq-shared.d/01-activity-log.conf <<'CONF'
+log-queries
+log-facility=/var/log/oshin-dns.log
+CONF
+touch /var/log/oshin-dns.log
+chmod 644 /var/log/oshin-dns.log
+if systemctl is-active --quiet NetworkManager; then
+  systemctl reload NetworkManager || true
+fi
 install -m 644 web.py portal.html login.html app.js style.css /opt/oshin-dashboard/
 install -m 755 helper.py /usr/local/sbin/oshin-fw
 python3 - <<'PY'
