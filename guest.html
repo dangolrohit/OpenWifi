@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>OshinWiFi · Guest Portal</title>
+    <style>
+        :root {
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+            color: #1e293b;
+            background: #f1f5f9;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+        .container { width: 100%; max-width: 440px; background: white; border-radius: 18px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.04); overflow: hidden; }
+        .header { background: #102b2b; color: white; padding: 32px 24px; text-align: center; }
+        .logo { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; background: #1c8d77; border-radius: 12px; font-size: 24px; margin-bottom: 12px; }
+        .header h1 { font-size: 24px; letter-spacing: -0.5px; }
+        .header p { color: #94a3b8; font-size: 14px; margin-top: 6px; }
+        .content { padding: 28px 24px; }
+        .card { border: 1.5px solid #e2e8f0; border-radius: 14px; padding: 20px; margin-bottom: 18px; transition: border-color .2s; }
+        .card.highlight { border-color: #167766; background: #f0fdf9; }
+        .card h2 { font-size: 18px; margin-bottom: 6px; color: #0f172a; }
+        .card p { font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 16px; }
+        .plan-meta { display: flex; gap: 12px; margin-bottom: 16px; }
+        .meta-pill { background: #e2e8f0; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; color: #334155; }
+        .card.highlight .meta-pill { background: #ccfbf1; color: #0f766e; }
+        button, .button { width: 100%; padding: 13px; border: 0; border-radius: 10px; background: #167766; color: white; font-size: 15px; font-weight: 650; cursor: pointer; transition: background .15s; }
+        button:hover { background: #125e51; }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        button.secondary { background: #f1f5f9; color: #334155; }
+        button.secondary:hover { background: #e2e8f0; }
+        .input-group { display: flex; gap: 8px; margin-top: 10px; }
+        input { flex: 1; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 10px; font-size: 16px; font-weight: 600; letter-spacing: 2px; text-align: center; }
+        input:focus { outline: none; border-color: #167766; }
+        .status { padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 16px; display: none; }
+        .status.error { background: #fef2f2; color: #b91c1c; display: block; }
+        .status.success { background: #f0fdf4; color: #15803d; display: block; }
+        .footer { text-align: center; font-size: 12px; color: #94a3b8; margin-top: 20px; }
+        .connected-box { text-align: center; padding: 20px 0; }
+        .connected-icon { font-size: 48px; margin-bottom: 12px; }
+        .timer { font-size: 32px; font-weight: 800; color: #167766; margin: 12px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">◉</div>
+            <h1>OshinWiFi Hotspot</h1>
+            <p>Welcome! Choose an access plan to connect.</p>
+        </div>
+        <div class="content" id="portal-content">
+            <div id="status-box" class="status"></div>
+
+            <!-- Starter Free Plan -->
+            <div class="card highlight" id="starter-card">
+                <h2>Starter Plan (Free)</h2>
+                <div class="plan-meta">
+                    <span class="meta-pill">⏱ 30 Minutes</span>
+                    <span class="meta-pill">⚡ 2 Mbps Speed</span>
+                </div>
+                <p>Free high-speed internet access. Click below to accept the fair usage terms and connect.</p>
+                <button id="starter-btn">Yes, I Agree & Connect</button>
+            </div>
+
+            <!-- Voucher Code Activation -->
+            <div class="card" id="voucher-card">
+                <h2>Have an Access Voucher?</h2>
+                <p>Enter your 6-digit customer voucher code provided by the administrator.</p>
+                <form id="voucher-form">
+                    <div class="input-group">
+                        <input id="voucher-code" placeholder="000000" maxlength="8" autocomplete="off" required>
+                        <button type="submit" id="voucher-btn" style="width:auto; padding:12px 20px;">Activate</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Available Plans List -->
+            <div id="plans-list" style="margin-top:10px;"></div>
+        </div>
+    </div>
+    <div class="footer">OshinWiFi Private Hotspot Network · Safe & Protected</div>
+
+    <script>
+        const statusBox = document.getElementById('status-box');
+        const content = document.getElementById('portal-content');
+
+        function showMessage(msg, isError = false) {
+            statusBox.textContent = msg;
+            statusBox.className = 'status ' + (isError ? 'error' : 'success');
+        }
+
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/guest/status');
+                const d = await res.json();
+                if (d.authorized && d.session) {
+                    renderConnected(d.session);
+                } else if (d.plans) {
+                    renderPlans(d.plans);
+                }
+            } catch (e) {}
+        }
+
+        function renderConnected(session) {
+            const expires = session.expires_at ? Math.max(0, Math.floor(session.expires_at - (Date.now() / 1000))) : 0;
+            const mins = Math.floor(expires / 60);
+            const secs = expires % 60;
+            content.innerHTML = `
+                <div class="connected-box">
+                    <div class="connected-icon">✓</div>
+                    <h2>You are connected!</h2>
+                    <p style="color:#64748b; font-size:14px; margin-top:4px;">Plan: <strong>${session.plan_name || 'Active Plan'}</strong></p>
+                    <div class="timer" id="countdown">${mins}m ${secs < 10 ? '0' : ''}${secs}s</div>
+                    <p style="font-size:13px; color:#64748b; margin-bottom:20px;">Remaining internet access time.</p>
+                    <a href="https://www.google.com" class="button" style="text-decoration:none; display:block;">Start Browsing →</a>
+                </div>
+            `;
+            setInterval(() => {
+                const el = document.getElementById('countdown');
+                if (!el) return;
+                const rem = session.expires_at ? Math.max(0, Math.floor(session.expires_at - (Date.now() / 1000))) : 0;
+                if (rem <= 0) {
+                    location.reload();
+                    return;
+                }
+                const m = Math.floor(rem / 60);
+                const s = rem % 60;
+                el.textContent = `${m}m ${s < 10 ? '0' : ''}${s}s`;
+            }, 1000);
+        }
+
+        function renderPlans(plans) {
+            const list = document.getElementById('plans-list');
+            if (!list) return;
+            const starter = plans.find(p => p.id === 'starter');
+            if (starter) {
+                const sCard = document.getElementById('starter-card');
+                if (sCard) {
+                    sCard.querySelector('h2').textContent = starter.name;
+                    sCard.querySelector('.plan-meta').innerHTML = `
+                        <span class="meta-pill">⏱ ${starter.duration_minutes} Mins</span>
+                        <span class="meta-pill">⚡ ${starter.speed_limit ? starter.speed_limit + ' Mbps' : 'Unlimited'}</span>
+                    `;
+                }
+            }
+        }
+
+        async function connect(payload, btn) {
+            if (btn) btn.disabled = true;
+            statusBox.style.display = 'none';
+            try {
+                const res = await fetch('/api/guest/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.error || 'Connection failed');
+                showMessage('Internet access granted! Redirecting…');
+                setTimeout(() => {
+                    checkStatus();
+                }, 1000);
+            } catch (err) {
+                showMessage(err.message, true);
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        document.getElementById('starter-btn').onclick = (e) => {
+            connect({ plan_id: 'starter' }, e.target);
+        };
+
+        document.getElementById('voucher-form').onsubmit = (e) => {
+            e.preventDefault();
+            const code = document.getElementById('voucher-code').value.trim();
+            if (code) connect({ voucher: code }, document.getElementById('voucher-btn'));
+        };
+
+        checkStatus();
+    </script>
+</body>
+</html>

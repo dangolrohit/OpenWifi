@@ -39,7 +39,7 @@ pkill -f 'dnsmasq.*dnsmasq-shared' 2>/dev/null || true
 if systemctl is-active --quiet NetworkManager; then
   systemctl restart NetworkManager || true
 fi
-install -m 644 web.py portal.html login.html app.js style.css /opt/oshin-dashboard/
+install -m 644 web.py portal.html login.html guest.html app.js style.css /opt/oshin-dashboard/
 install -m 755 helper.py /usr/local/sbin/oshin-fw
 python3 - <<'PY'
 import getpass,hashlib,json,os,secrets

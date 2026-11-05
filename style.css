@@ -693,3 +693,51 @@ td button {
     width: auto !important;
     margin: 0;
 }
+
+.plans-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 14px;
+}
+
+.plan-card {
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 18px;
+    background: #f8fafc;
+}
+
+.plan-card.active-plan {
+    border-color: #167766;
+    background: #fff;
+}
+
+.plan-card h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.plan-card label {
+    margin: 10px 0 4px;
+    font-size: 12px;
+}
+
+.plan-card input, .plan-card select {
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.voucher-pill {
+    font-family: monospace;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    background: #eef7f3;
+    color: #12574e;
+    padding: 4px 8px;
+    border-radius: 6px;
+}

@@ -15,6 +15,7 @@ else {
         filtering: ['Device Filtering', 'Control IPv4 internet access by device address.'],
         usages: ['Usages', 'Network traffic measured on the access-point interface.'],
         activity: ['Activity Logs', 'Monitor website and domain requests from connected devices.'],
+        plans: ['Plans & Hotspot', 'Configure guest captive portal plans, vouchers, and active hotspot sessions.'],
         logs: ['User Logs', 'Review administrator activity in this portal.'],
         settings: ['Settings', 'Portal preferences and connection details.']
     };
@@ -38,6 +39,11 @@ else {
     function statusBadge(dev) {
         if (dev.blocked) return '<span class="badge off">Blocked</span>';
         if (dev.scheduled) return '<span class="badge off" title="Curfew active">🌙 Curfew Active</span>';
+        if (dev.guest_session) {
+            const rem = Math.max(0, Math.floor(dev.guest_session.expires_at - (Date.now() / 1000)));
+            const m = Math.floor(rem / 60);
+            return `<span class="badge on" title="Guest session active">🎟 ${m}m left</span>`;
+        }
         if (dev.schedule && dev.schedule.enabled) return `<span class="badge" title="Schedule active between ${dev.schedule.start} and ${dev.schedule.end}">⏱ ${dev.schedule.start}-${dev.schedule.end}</span>`;
         return '<span class="badge">Active</span>';
     }
@@ -59,7 +65,7 @@ else {
                     <div class="form-row">
                         <label for="edit-group">Network Group</label>
                         <select id="edit-group">
-                            <option value="family" ${dev.group === 'family' ? 'selected' : ''}>Family (Full LAN access, admin allowed)</option>
+                            <option value="family" ${dev.group === 'family' ? 'selected' : ''}>Family (Bypasses captive portal, full LAN access)</option>
                             <option value="customer" ${dev.group === 'customer' ? 'selected' : ''}>Customer / Guest (Isolated from LAN, Admin portal locked)</option>
                             <option value="staff" ${dev.group === 'staff' ? 'selected' : ''}>Staff / Business</option>
                             <option value="default" ${dev.group === 'default' ? 'selected' : ''}>Default / Unassigned</option>
@@ -171,7 +177,7 @@ else {
                     page.innerHTML = `
                     <div class="cards">
                         ${card('Total devices', data.devices.length, 'Discovered on Wi-Fi')}
-                        ${card('Family devices', familyCount, 'Private LAN access')}
+                        ${card('Family devices', familyCount, 'Bypasses captive portal')}
                         ${card('Customers (Isolated)', customerCount, 'Portal locked · QoS capped')}
                     </div>
                     <div class="notice"><strong>Network Security Active:</strong> Devices marked as <em>Customer</em> are blocked from opening the administrator portal (port 8090) and isolated from accessing family devices. Speed limits (QoS) and access curfews apply automatically.</div>
@@ -181,7 +187,7 @@ else {
                             ${detail('Wireless network', 'OshinWiFi (configured name)')}
                             ${detail('Gateway', '192.168.16.2 · Ubuntu')}
                             ${detail('Access point', '192.168.16.1 · AP mode')}
-                            ${detail('Management', 'HTTPS · Port 8090')}
+                            ${detail('Captive Hotspot', 'Port 8088 · Active')}
                         </section>
                         <section class="panel">
                             <h2>Access & QoS controls</h2>
@@ -219,7 +225,7 @@ else {
                 <div class="cards">
                     ${card('Recorded queries', total, filterIp ? 'Filtered for ' + filterIp : 'All client devices')}
                     ${card('Active querying devices', uniqueClients, 'Devices seen in DNS log')}
-                    ${card('DNS logger status', d.log_exists ? 'Active' : 'Standby', d.log_exists ? '/var/log/oshin-dns.log' : 'Awaiting DNS lookups')}
+                    ${card('DNS logger status', d.log_exists ? 'Active' : 'Standby', d.log_exists ? '/var/log/dnsmasq.log' : 'Awaiting DNS lookups')}
                 </div>
                 <div class="notice">DNS query logs record domain name lookups (e.g. youtube.com, instagram.com) routed through your gateway. Modern web connections use TLS/HTTPS encryption, so webpage contents, search queries, passwords, and chat messages remain encrypted. Devices with 'Private DNS' (DoH / DoT) enabled bypass local DNS logging.</div>
                 <section class="panel">
@@ -269,10 +275,209 @@ else {
                     clearBtn.disabled = true;
                     try { await api('/api/activity/clear', {}); await load(); } catch (e) { error(e); clearBtn.disabled = false; }
                 };
+            } else if (key === 'plans') {
+                const data = await api('/api/plans');
+                const guests = Object.values(data.guests || {});
+                const now = Date.now() / 1000;
+                const activeGuests = guests.filter(g => g.expires_at > now);
+                const vouchers = Object.values(data.vouchers || {});
+                const unusedVouchers = vouchers.filter(v => !v.used);
+                const plans = data.plans || [];
+
+                page.innerHTML = `
+                <div class="cards">
+                    ${card('Hotspot Barrier', data.captive_enabled ? 'Active' : 'Disabled', data.captive_enabled ? 'Enforcing login portal' : 'Open access for all')}
+                    ${card('Active Guests', activeGuests.length, 'Currently connected')}
+                    ${card('Unused Vouchers', unusedVouchers.length, 'Available for customers')}
+                </div>
+                <div class="notice">
+                    <strong>Captive Hotspot Portal:</strong> Customer devices connecting to Wi-Fi are redirected to the guest login page until authorized. Devices tagged as <em>Family</em> automatically bypass the portal.
+                    <button class="secondary small" id="toggle-captive-btn" style="margin-left:12px;">${data.captive_enabled ? 'Disable Hotspot Barrier' : 'Enable Hotspot Barrier'}</button>
+                </div>
+
+                <!-- Active Guest Sessions -->
+                <section class="panel">
+                    <h2>Active Customer Hotspot Sessions</h2>
+                    <div class="tablewrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Client IP</th>
+                                    <th>Plan</th>
+                                    <th>Time Remaining</th>
+                                    <th>Speed Limit</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${activeGuests.map(g => {
+                                    const rem = Math.max(0, Math.floor(g.expires_at - now));
+                                    const m = Math.floor(rem / 60);
+                                    const s = rem % 60;
+                                    return `<tr>
+                                        <td><strong>${esc(g.ip)}</strong></td>
+                                        <td>${esc(g.plan_id)}</td>
+                                        <td><span class="badge ${rem < 300 ? 'off' : ''}">⏱ ${m}m ${s < 10 ? '0' : ''}${s}s</span></td>
+                                        <td>${g.speed_limit ? g.speed_limit + ' Mbps' : 'Unlimited'}</td>
+                                        <td>
+                                            <div class="row-actions">
+                                                <button class="secondary small" data-extend="${esc(g.ip)}" title="Add 30 minutes">+30m</button>
+                                                <button class="danger small" data-revoke="${esc(g.ip)}">Disconnect</button>
+                                            </div>
+                                        </td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        ${activeGuests.length ? '' : '<div class="empty">No active guest sessions. When customers connect and accept a plan, their sessions appear here.</div>'}
+                    </div>
+                </section>
+
+                <!-- 5 Customizable Access Plans -->
+                <section class="panel">
+                    <h2>Hotspot Access Plans (5 Configurable Plans)</h2>
+                    <p class="muted">Adjust the duration, bandwidth speed limit, and authorization mode for each plan.</p>
+                    <form id="plans-form">
+                        <div class="plans-grid">
+                            ${plans.map((p, idx) => `
+                            <div class="plan-card ${p.active ? 'active-plan' : ''}">
+                                <h3>
+                                    <span>Plan ${idx + 1}: ${esc(p.name)}</span>
+                                    <label class="checkbox-label" style="font-size:12px;">
+                                        <input type="checkbox" name="active_${p.id}" ${p.active ? 'checked' : ''}> Active
+                                    </label>
+                                </h3>
+                                <label>Plan Name</label>
+                                <input name="name_${p.id}" value="${esc(p.name)}" required>
+                                <label>Access Mode</label>
+                                <select name="type_${p.id}">
+                                    <option value="click" ${p.type === 'click' ? 'selected' : ''}>One-Click Agreement (Free)</option>
+                                    <option value="voucher" ${p.type === 'voucher' ? 'selected' : ''}>Voucher Code Required</option>
+                                </select>
+                                <div style="display:flex; gap:10px;">
+                                    <div style="flex:1;">
+                                        <label>Duration (mins)</label>
+                                        <input type="number" name="duration_${p.id}" value="${p.duration_minutes}" min="1" max="43200" required>
+                                    </div>
+                                    <div style="flex:1;">
+                                        <label>Speed (Mbps)</label>
+                                        <input type="number" name="speed_${p.id}" value="${p.speed_limit}" min="0" max="1000" required>
+                                    </div>
+                                </div>
+                            </div>
+                            `).join('')}
+                        </div>
+                        <div style="margin-top:20px; text-align:right;">
+                            <button type="submit" id="save-plans-btn">Save All Plans</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- Voucher Management -->
+                <section class="panel">
+                    <h2>Customer Vouchers</h2>
+                    <p class="muted">Generate single-use access PINs for customers using your paid or extended plans.</p>
+                    <div class="activity-toolbar">
+                        <select id="voucher-plan-select" aria-label="Select Plan">
+                            ${plans.filter(p => p.type === 'voucher').map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${p.duration_minutes}m · ${p.speed_limit ? p.speed_limit + ' Mbps' : 'Unlimited'})</option>`).join('')}
+                        </select>
+                        <button id="gen-voucher-btn" class="button" style="width:auto;">+ Generate Voucher PIN</button>
+                    </div>
+                    <div class="tablewrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Voucher PIN</th>
+                                    <th>Assigned Plan</th>
+                                    <th>Created Date</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${vouchers.map(v => `
+                                <tr>
+                                    <td><span class="voucher-pill">${esc(v.code)}</span></td>
+                                    <td>${esc(v.plan_id)}</td>
+                                    <td>${esc(new Date(v.created_at * 1000).toLocaleString())}</td>
+                                    <td>${v.used ? `<span class="badge off">Used by ${esc(v.used_by || 'Guest')}</span>` : '<span class="badge on">Available</span>'}</td>
+                                    <td><button class="secondary small" data-del-voucher="${esc(v.code)}">Delete</button></td>
+                                </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        ${vouchers.length ? '' : '<div class="empty">No vouchers generated yet. Click "Generate Voucher PIN" to create one.</div>'}
+                    </div>
+                </section>
+                `;
+
+                document.getElementById('toggle-captive-btn').onclick = async () => {
+                    await api('/api/plans/toggle', { enabled: !data.captive_enabled });
+                    await load();
+                };
+
+                document.querySelectorAll('[data-extend]').forEach(b => {
+                    b.onclick = async () => {
+                        await api('/api/guest/extend', { ip: b.dataset.extend, minutes: 30 });
+                        await load();
+                    };
+                });
+
+                document.querySelectorAll('[data-revoke]').forEach(b => {
+                    b.onclick = async () => {
+                        if (!confirm(`Revoke internet access for guest ${b.dataset.revoke}?`)) return;
+                        await api('/api/guest/revoke', { ip: b.dataset.revoke });
+                        await load();
+                    };
+                });
+
+                document.getElementById('gen-voucher-btn').onclick = async () => {
+                    const planSelect = document.getElementById('voucher-plan-select');
+                    if (!planSelect || !planSelect.value) {
+                        alert('No voucher plan configured.');
+                        return;
+                    }
+                    await api('/api/vouchers/create', { plan_id: planSelect.value });
+                    await load();
+                };
+
+                document.querySelectorAll('[data-del-voucher]').forEach(b => {
+                    b.onclick = async () => {
+                        await api('/api/vouchers/delete', { code: b.dataset.delVoucher });
+                        await load();
+                    };
+                });
+
+                document.getElementById('plans-form').onsubmit = async (e) => {
+                    e.preventDefault();
+                    const form = e.target;
+                    const saveBtn = document.getElementById('save-plans-btn');
+                    saveBtn.disabled = true;
+                    try {
+                        const updatedPlans = plans.map(p => {
+                            return {
+                                id: p.id,
+                                name: form[`name_${p.id}`].value.trim(),
+                                type: form[`type_${p.id}`].value,
+                                duration_minutes: Number(form[`duration_${p.id}`].value) || 30,
+                                speed_limit: Number(form[`speed_${p.id}`].value) || 0,
+                                active: form[`active_${p.id}`].checked,
+                                description: p.description || ''
+                            };
+                        });
+                        await api('/api/plans/update', { plans: updatedPlans });
+                        message.textContent = 'Plans saved successfully!';
+                        message.className = 'status success';
+                        await load();
+                    } catch (err) {
+                        error(err);
+                        saveBtn.disabled = false;
+                    }
+                };
             } else if (key === 'logs') {
                 const d = await api('/api/logs'); page.innerHTML = `<div class="notice">Administrator sign-ins, sign-outs, and filtering actions only. To view website domains looked up by Wi-Fi clients, see <a href="/activity">Activity Logs</a>. The latest 300 events are kept in memory and reset when the service restarts.</div><section class="panel"><h2>Recent administrator activity</h2><div class="tablewrap"><table><thead><tr><th>Time</th><th>Activity</th><th>Admin address</th><th>Target</th></tr></thead><tbody>${d.events.map(e => `<tr><td>${esc(new Date(e.time * 1000).toLocaleString())}</td><td>${esc(e.action)}</td><td>${esc(e.client)}</td><td>${esc(e.target || '—')}</td></tr>`).join('')}</tbody></table>${d.events.length ? '' : '<div class="empty">No events in this service session.</div>'}</div></section>`;
             } else if (key === 'settings') {
-                page.innerHTML = `<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, activity, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username', 'admin')}${detail('Idle timeout', '30 minutes')}${detail('Maximum session', '8 hours')}${detail('Authentication', 'Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway', '192.168.16.2/24')}${detail('Downstream interface', 'enp1s0')}${detail('Router', '192.168.16.1')}${detail('Portal version', '2.2')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`; let value = '0'; try { value = localStorage.getItem('oshin-refresh') || '0'; } catch { } const select = document.getElementById('interval'); select.value = value; select.onchange = () => { try { localStorage.setItem('oshin-refresh', select.value); } catch { } schedule(); };
+                page.innerHTML = `<div class="split"><section class="panel"><h2>Display preferences</h2><label for="interval">Automatic refresh</label><select id="interval" class="settings-select"><option value="0">Off — refresh manually</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select><p class="muted">Saved in this browser. Applies to devices, usage, activity, plans, and logs.</p></section><section class="panel"><h2>Administrator session</h2>${detail('Username', 'admin')}${detail('Idle timeout', '30 minutes')}${detail('Maximum session', '8 hours')}${detail('Authentication', 'Login page + secure session cookie')}</section></div><section class="panel"><h2>Network configuration</h2>${detail('Gateway', '192.168.16.2/24')}${detail('Downstream interface', 'enp1s0')}${detail('Router', '192.168.16.1')}${detail('Portal version', '2.3')}<p class="muted">Network configuration is shown for reference; editing it here is not enabled.</p></section>`; let value = '0'; try { value = localStorage.getItem('oshin-refresh') || '0'; } catch { } const select = document.getElementById('interval'); select.value = value; select.onchange = () => { try { localStorage.setItem('oshin-refresh', select.value); } catch { } schedule(); };
             }
             message.textContent = 'Updated ' + new Date().toLocaleTimeString();
         } catch (e) { error(e); } finally { loading = false; }

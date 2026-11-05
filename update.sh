@@ -7,7 +7,7 @@ python3 - <<'PY'
 from pathlib import Path
 compile(Path('web.py').read_text(),'web.py','exec')
 compile(Path('helper.py').read_text(),'helper.py','exec')
-for name in ['portal.html','login.html','app.js','style.css','helper.py']:
+for name in ['portal.html','login.html','guest.html','app.js','style.css','helper.py']:
     if not Path(name).is_file():raise SystemExit('Missing file: '+name)
 PY
 backup_dir=$(mktemp -d /opt/oshin-dashboard-backup.XXXXXX)
@@ -42,7 +42,8 @@ if systemctl is-active --quiet NetworkManager; then
 fi
 
 install -m 755 helper.py /usr/local/sbin/oshin-fw
-install -o root -g root -m 644 web.py portal.html login.html app.js style.css /opt/oshin-dashboard/
+/usr/local/sbin/oshin-fw restore || true
+install -o root -g root -m 644 web.py portal.html login.html guest.html app.js style.css /opt/oshin-dashboard/
 systemctl start oshin-dashboard
 python3 - <<'PY'
 import ssl,time,urllib.request

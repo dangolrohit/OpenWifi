@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -79,6 +80,106 @@ class FirewallTests(unittest.TestCase):
             self.assertIn('forward iifname "enp1s0" oifname "enp1s0" ip saddr @customers counter drop', script)
             self.assertIn('limit rate over 625 kbytes/second', script)
             self.assertIn('add element inet oshin_dashboard customers { 192.168.16.105 }', script)
+
+    def test_captive_portal_nft_rules(self):
+        with patch.object(helper, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, '', '')
+            meta = {
+                'captive_enabled': True,
+                'devices': {
+                    '192.168.16.104': {'name': 'Dad Phone', 'group': 'family'},
+                    '192.168.16.105': {'name': 'Visitor', 'group': 'customer'}
+                }
+            }
+            guests = {
+                '192.168.16.110': {'expires_at': time.time() + 1800, 'speed_limit': 2}
+            }
+            helper.apply_rules({'192.168.16.103'}, meta, guests)
+            script = run.call_args.kwargs['input']
+            self.assertIn('add set inet oshin_dashboard whitelisted', script)
+            self.assertIn('add set inet oshin_dashboard authenticated', script)
+            self.assertIn('add element inet oshin_dashboard whitelisted { 192.168.16.104 }', script)
+            self.assertIn('add element inet oshin_dashboard authenticated { 192.168.16.110 }', script)
+            self.assertIn('tcp dport 80 redirect to :8088', script)
+            self.assertIn('tcp dport 853 counter drop', script)
+            self.assertIn('forward iifname "enp1s0" counter drop', script)
+
+        # When captive portal is disabled:
+        with patch.object(helper, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, '', '')
+            meta['captive_enabled'] = False
+            helper.apply_rules(set(), meta, {})
+            script = run.call_args.kwargs['input']
+            self.assertNotIn('redirect to :8088', script)
+            self.assertNotIn('forward iifname "enp1s0" counter drop', script)
+
+    def test_plans_and_voucher_helper_actions(self):
+        with tempfile.TemporaryDirectory() as td:
+            p_state = Path(td) / 'plans.json'
+            v_state = Path(td) / 'vouchers.json'
+            g_state = Path(td) / 'guests.json'
+            m_state = Path(td) / 'metadata.json'
+            s_state = Path(td) / 'blocked.json'
+            lock_f = Path(td) / 'lock'
+            lock_f.touch()
+
+            with patch.object(helper, 'PLANS_STATE', p_state), \
+                 patch.object(helper, 'VOUCHERS_STATE', v_state), \
+                 patch.object(helper, 'GUEST_STATE', g_state), \
+                 patch.object(helper, 'METADATA', m_state), \
+                 patch.object(helper, 'STATE', s_state), \
+                 patch.object(helper.os, 'geteuid', return_value=0), \
+                 patch.object(helper, 'apply_rules'):
+                import io
+
+                # 1. set_plans
+                plans_input = [{'id': 'custom', 'name': 'Custom Plan', 'type': 'click', 'duration_minutes': 45, 'speed_limit': 4, 'active': True, 'description': 'Custom'}]
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['set_plans', json.dumps(plans_input)])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                    self.assertEqual(len(res['plans']), 1)
+
+                # 2. create_voucher
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['create_voucher', 'standard', '123456'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                    self.assertEqual(res['voucher']['code'], '123456')
+
+                # 3. delete_voucher
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['delete_voucher', '123456'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+
+                # 4. authorize_guest
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['authorize_guest', '192.168.16.105', 'starter', '30', '2'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                    self.assertEqual(res['session']['ip'], '192.168.16.105')
+
+                # 5. check_guest_expiries (not expired yet)
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['check_guest_expiries'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                    self.assertEqual(res['active_count'], 1)
+                    self.assertEqual(res['expired_count'], 0)
+
+                # 6. revoke_guest
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['revoke_guest', '192.168.16.105'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+
+                # 7. toggle_captive
+                with patch('sys.stdout', new_callable=io.StringIO) as fake_out:
+                    helper.main(['toggle_captive', 'false'])
+                    res = json.loads(fake_out.getvalue())
+                    self.assertTrue(res['ok'])
+                    self.assertFalse(res['captive_enabled'])
 
     def test_dns_log_parsing(self):
         with tempfile.TemporaryDirectory() as td:
@@ -154,7 +255,7 @@ class HTTPTests(unittest.TestCase):
     def test_all_private_pages_and_apis(self):
         for path in web.PAGES:
             self.assertEqual(self.request('GET',path)[0],303)
-        for path in ['/api/devices','/api/usage','/api/logs','/api/activity']:
+        for path in ['/api/devices','/api/usage','/api/logs','/api/activity','/api/plans']:
             self.assertEqual(self.request('GET',path)[0],401)
     def test_login_rotation_logout_revocation(self):
         token,s=web.new_session()
@@ -231,5 +332,163 @@ class HTTPTests(unittest.TestCase):
             # Test bad payload
             st,body,_=self.request('POST','/api/device/update',{'ip':'bad'},token,s['csrf'])
             self.assertEqual(st,400)
+
+    def test_plans_admin_apis(self):
+        token, s = web.new_session(True)
+        # 1. GET /api/plans
+        with patch.object(web, 'helper', return_value={'plans': [], 'vouchers': {}, 'guests': {}, 'metadata': {'captive_enabled': True}}) as call, \
+             patch.object(web, 'devices', return_value=[]):
+            st, body, _ = self.request('GET', '/api/plans', token=token)
+            self.assertEqual(st, 200)
+            res = json.loads(body.decode())
+            self.assertTrue(res['captive_enabled'])
+            call.assert_called_with('status')
+
+        # 2. POST /api/plans/update
+        with patch.object(web, 'helper', return_value={'ok': True}) as call:
+            st, body, _ = self.request('POST', '/api/plans/update', {'plans': [{'id': 'starter'}]}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            self.assertEqual(call.call_args[0][0], 'set_plans')
+
+        # 3. POST /api/plans/toggle
+        with patch.object(web, 'helper', return_value={'ok': True}) as call:
+            st, body, _ = self.request('POST', '/api/plans/toggle', {'enabled': False}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            call.assert_called_with('toggle_captive', '0')
+
+        # 4. POST /api/vouchers/create
+        with patch.object(web, 'helper', return_value={'ok': True, 'voucher': {'code': '112233'}}) as call:
+            st, body, _ = self.request('POST', '/api/vouchers/create', {'plan_id': 'standard'}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            call.assert_called_with('create_voucher', 'standard')
+
+        # 5. POST /api/vouchers/delete
+        with patch.object(web, 'helper', return_value={'ok': True}) as call:
+            st, body, _ = self.request('POST', '/api/vouchers/delete', {'code': '112233'}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            call.assert_called_with('delete_voucher', '112233')
+
+        # 6. POST /api/guest/revoke
+        with patch.object(web, 'helper', return_value={'ok': True}) as call:
+            st, body, _ = self.request('POST', '/api/guest/revoke', {'ip': '192.168.16.105'}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            call.assert_called_with('revoke_guest', '192.168.16.105')
+
+        # 7. POST /api/guest/extend
+        with patch.object(web, 'helper') as call:
+            call.side_effect = [
+                {'guests': {'192.168.16.105': {'plan_id': 'starter', 'speed_limit': 2}}},
+                {'ok': True}
+            ]
+            st, body, _ = self.request('POST', '/api/guest/extend', {'ip': '192.168.16.105', 'minutes': 45}, token, s['csrf'])
+            self.assertEqual(st, 200)
+            call.assert_any_call('authorize_guest', '192.168.16.105', 'starter', '45', '2')
+
+class CaptiveHTTPTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = web.ThreadingHTTPServer(('127.0.0.1', 0), web.CaptiveHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join()
+
+    def request(self, method, path, body=None):
+        headers = {}
+        if body is not None:
+            body = json.dumps(body)
+            headers['Content-Type'] = 'application/json'
+        conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+        conn.request(method, path, body, headers)
+        r = conn.getresponse()
+        data = r.read()
+        status = r.status
+        hdr = dict(r.getheaders())
+        conn.close()
+        return status, data, hdr
+
+    def test_unauthenticated_probes_redirect_to_guest(self):
+        with patch.object(web, 'helper', return_value={'guests': {}}):
+            for probe in ['/generate_204', '/hotspot-detect.html', '/connecttest.txt', '/ncsi.txt']:
+                st, body, h = self.request('GET', probe)
+                self.assertEqual(st, 302)
+                self.assertIn('/guest', h.get('Location', ''))
+
+    def test_guest_landing_page(self):
+        st, body, h = self.request('GET', '/guest')
+        self.assertEqual(st, 200)
+        self.assertIn(b'OshinWiFi Hotspot', body)
+        self.assertIn(b'Starter Plan', body)
+
+    def test_guest_status_api(self):
+        with patch.object(web, 'helper', return_value={'guests': {}, 'plans': [{'id': 'starter', 'active': True}]}):
+            st, body, h = self.request('GET', '/api/guest/status')
+            self.assertEqual(st, 200)
+            res = json.loads(body.decode())
+            self.assertFalse(res['authorized'])
+            self.assertEqual(len(res['plans']), 1)
+
+    def test_guest_connect_starter_plan(self):
+        st_data = {
+            'plans': [{'id': 'starter', 'name': 'Starter Free', 'type': 'click', 'duration_minutes': 30, 'speed_limit': 2, 'active': True}],
+            'vouchers': {},
+            'guests': {}
+        }
+        with patch.object(web, 'helper') as mock_helper:
+            def helper_side_effect(*args):
+                if args[0] == 'status':
+                    return st_data
+                if args[0] == 'authorize_guest':
+                    return {'ok': True, 'session': {'ip': args[1], 'plan_id': args[2], 'expires_at': time.time() + 1800}}
+                return {'ok': True}
+            mock_helper.side_effect = helper_side_effect
+
+            st, body, h = self.request('POST', '/api/guest/connect', {'plan_id': 'starter'})
+            self.assertEqual(st, 200)
+            res = json.loads(body.decode())
+            self.assertTrue(res['ok'])
+            self.assertEqual(res['plan_name'], 'Starter Free')
+            self.assertEqual(res['duration_minutes'], 30)
+
+    def test_guest_connect_voucher(self):
+        st_data = {
+            'plans': [{'id': 'standard', 'name': 'Standard 2-Hour', 'type': 'voucher', 'duration_minutes': 120, 'speed_limit': 5, 'active': True}],
+            'vouchers': {'987654': {'code': '987654', 'plan_id': 'standard', 'used': False}},
+            'guests': {}
+        }
+        with patch.object(web, 'helper') as mock_helper:
+            def helper_side_effect(*args):
+                if args[0] == 'status':
+                    return st_data
+                if args[0] == 'delete_voucher':
+                    return {'ok': True}
+                if args[0] == 'authorize_guest':
+                    return {'ok': True, 'session': {'ip': args[1], 'plan_id': args[2], 'expires_at': time.time() + 7200}}
+                return {'ok': True}
+            mock_helper.side_effect = helper_side_effect
+
+            # Test invalid voucher
+            st, body, h = self.request('POST', '/api/guest/connect', {'voucher': '000000'})
+            self.assertEqual(st, 400)
+
+            # Test valid voucher
+            st, body, h = self.request('POST', '/api/guest/connect', {'voucher': '987654'})
+            self.assertEqual(st, 200)
+            res = json.loads(body.decode())
+            self.assertTrue(res['ok'])
+            self.assertEqual(res['plan_name'], 'Standard 2-Hour')
+
+    def test_authenticated_probes_succeed(self):
+        with patch.object(web, 'helper', return_value={'guests': {'127.0.0.1': {'expires_at': time.time() + 1800}}}):
+            st, body, h = self.request('GET', '/generate_204')
+            self.assertEqual(st, 204)
+
+            st, body, h = self.request('GET', '/connecttest.txt')
+            self.assertEqual(st, 200)
+            self.assertEqual(body.strip(), b'Success')
 
 if __name__=='__main__':unittest.main()

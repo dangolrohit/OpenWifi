@@ -45,37 +45,63 @@ local self-signed certificate. Verify the SHA-256 fingerprint printed by the
 installer before accepting the browser certificate warning. Keep the portal
 private; do not expose it to the public internet.
 
-## Pages in version 2.2
+## Pages in version 2.3
 
 - Dashboard: overview of total discovered devices, family devices, isolated customer
-  devices, and active access rules.
+  devices, active hotspot guests, and active access rules.
+- Plans & Hotspot: complete hotspot management. Toggle Captive Portal on/off, customize
+  5 access plans (Starter 30-min agreement, Standard, Half-Day, Full-Day, VIP) with custom
+  durations and QoS speed limits, generate and delete 6-digit access voucher PINs, and monitor
+  live guest sessions with real-time countdown timers, extend (+30m), and revoke controls.
 - Wifi Settings: configured network details and link to the router admin UI.
   Direct SSID/password editing requires a router integration not yet provided.
 - Connected Device: full device management. Assign device nicknames (e.g., "Dad's Phone",
   "Table 4 Customer"), assign network groups (Family, Customer, Staff), configure QoS
   speed limits (e.g. 5 Mbps), set bedtime/curfew access schedules, and block/unblock.
+  *Note: Devices marked as Family or Staff automatically bypass the captive portal.*
 - Device Filtering: current blocked addresses and unblock controls.
 - Usages: real aggregate enp1s0 RX/TX counters and average rate between refreshes.
 - Activity Logs: real-time DNS query monitoring recording website and domain requests
   (e.g., youtube.com, instagram.com) made by connected devices. Filterable by client
   device IP, searchable by domain name, and clearable by the administrator.
-- User Logs: last 300 admin sign-in/out and filtering events in memory; resets
+- User Logs: last 300 admin sign-in/out, filtering, and hotspot connection events in memory; resets
   at service restart. This is admin portal audit logging.
 - Settings: browser-local automatic refresh preference and configuration details.
 - Logout: invalidates the current session and returns to the login page.
 
 ## What it does
 
-- Device identification: assign custom nicknames and categorize devices into Family vs. Customer.
-- Customer Isolation & Portal Lockdown: devices marked as Customer are blocked from opening
+- **Open Wi-Fi Captive Portal**: Clients connect to an open Wi-Fi network with zero password hassle.
+  Internet forwarding is strictly barred until the user accepts the Starter Plan terms or enters a voucher PIN.
+- **5 Customizable Access Plans**:
+  1. **Starter Plan (Free)**: 1-click "Yes, I Agree & Connect" button granting 30 minutes of light internet access (2 Mbps speed limit). Expires automatically after 30 minutes.
+  2. **Standard 2-Hour**: 120 minutes voucher code access (5 Mbps limit).
+  3. **Half-Day Pass**: 6 hours high-speed voucher code access (10 Mbps limit).
+  4. **Full-Day Pass**: 24 hours unlimited access voucher code access (15 Mbps limit).
+  5. **VIP Premium**: 3-day unrestricted high-bandwidth VIP access (25 Mbps limit).
+  *All 5 plans are fully customizable by the admin (custom duration, speed limit, active status, description).*
+- **Voucher PIN Generation**: Admin can generate random 6-digit vouchers (or custom codes) with 1 click in the dashboard and hand them to customers.
+- **Whitelisting for Family & Staff**: Mark any device as `Family` or `Staff` in Connected Devices, and they bypass the captive portal completely with permanent internet access.
+- **Device identification**: assign custom nicknames and categorize devices into Family vs. Customer vs. Staff.
+- **Customer Isolation & Portal Lockdown**: devices marked as Customer are blocked from opening
   the admin portal (port 8090) and isolated from accessing family devices on the local subnet.
-- Bandwidth QoS / Speed Limits: throttle customer or heavy-usage devices (e.g. 2 Mbps, 5 Mbps,
+- **Bandwidth QoS / Speed Limits**: throttle customer or heavy-usage devices (e.g. 2 Mbps, 5 Mbps,
   10 Mbps) to ensure family devices always have full gateway speed.
-- Access Schedules (Curfews & Bedtime): automatically disable internet access for selected
+- **Access Schedules (Curfews & Bedtime)**: automatically disable internet access for selected
   devices during bedtime (e.g. 22:00 to 06:00) or outside business hours.
-- Website and domain activity tracking via gateway DNS query logging.
-- IPv4 block/unblock for selected addresses. Changes persist across reboot.
+- **Website and domain activity tracking** via gateway DNS query logging.
+- **IPv4 block/unblock** for selected addresses. Changes persist across reboot.
 - The admin's current client IP cannot block itself through the UI.
+
+### How the Captive Portal & Hotspot Work
+
+1. **Probe Interception**: When a smartphone or laptop connects to the open Wi-Fi, it sends HTTP probes to domains such as `connectivitycheck.gstatic.com/generate_204`, `captive.apple.com/hotspot-detect.html`, or `msftconnecttest.com/connecttest.txt`.
+2. **NAT Redirection**: Unauthenticated devices have their port 80 traffic intercepted by `nftables` in prerouting:
+   `iifname "enp1s0" ip saddr != @whitelisted ip saddr != @authenticated tcp dport 80 redirect to :8088`
+3. **Portal Prompt**: The unprivileged captive daemon on port 8088 intercepts probe requests and returns HTTP 302 pointing to `http://192.168.16.2:8088/guest`, which automatically opens the system "Sign in to Wi-Fi network" prompt on Android, iOS, Windows, and macOS.
+4. **Starter & Voucher Authorization**: The user taps "Yes, I Agree & Connect" (or enters a voucher PIN). The backend validates the plan/voucher, registers the client IP in `guests.json` with an expiration timestamp and QoS limit, and adds the IP to the `@authenticated` nftables set.
+5. **Forwarding Barrier**: The `nftables` forward chain strictly drops all traffic from non-whitelisted, unauthenticated devices (`forward iifname "enp1s0" counter drop`). Once authenticated, packets flow seamlessly through the gateway to the internet.
+6. **Automatic Expiration**: A background thread running every 30 seconds checks for expired guest sessions, cleans up expired entries, and updates the nftables firewall set dynamically. When the session expires, the client immediately loses internet access and is redirected back to the captive portal on their next web request.
 
 Devices appear after they exchange traffic with the gateway. The list is not a
 definitive list of Wi-Fi connections. STALE is a neighbour-cache state, not proof
