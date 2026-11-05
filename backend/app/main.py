@@ -3,9 +3,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from .core.config import settings
 from .core.security import hash_password
@@ -103,8 +104,20 @@ async def websocket_endpoint(websocket: WebSocket):
 async def health():
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
 
-# If frontend production build exists, serve static assets
-dist_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+# Locate frontend production build (in-container or local workspace)
+dist_dir = Path("/app/frontend/dist")
+if not dist_dir.exists():
+    dist_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
 if dist_dir.exists() and (dist_dir / "index.html").exists():
+    @app.exception_handler(404)
+    async def spa_404_handler(request: Request, exc: Exception):
+        """SPA fallback: serve index.html for client-side navigation."""
+        if not request.url.path.startswith("/api/"):
+            index_path = dist_dir / "index.html"
+            if index_path.exists():
+                return FileResponse(index_path)
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 

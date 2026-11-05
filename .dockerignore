@@ -1,0 +1,9 @@
+**/.git
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/dist
+**/*.db
+**/*.sqlite

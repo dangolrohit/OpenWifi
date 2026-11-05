@@ -56,14 +56,20 @@ fi
 
 # 5. Install Network Agent as host systemd service
 echo "[4/6] Installing WiFiRouter Network Agent systemd unit..."
+install -d -m 755 /opt/wifirouter
+cp -rf "$ROOT_DIR/network-agent" /opt/wifirouter/
 install -m 644 deployment/systemd/wifirouter-agent.service /etc/systemd/system/wifirouter-agent.service
 systemctl daemon-reload
 systemctl enable --now wifirouter-agent.service
+systemctl restart wifirouter-agent.service
 
 # 6. Launch Docker Compose Stack
 echo "[5/6] Starting application services with Docker Compose..."
 if [ ! -f .env ]; then
   cp .env.example .env
+else
+  # Ensure container hostname is used for postgres in existing .env
+  sed -i 's/@localhost:5432/@postgres:5432/g' .env 2>/dev/null || true
 fi
 
 docker compose pull || true
@@ -73,7 +79,7 @@ docker compose up -d --build
 echo "[6/6] Verifying service health..."
 sleep 5
 for attempt in {1..15}; do
-  if curl -sf http://127.0.0.1:8090/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:8090/health >/dev/null 2>&1 || curl -sf http://192.168.16.2:8090/health >/dev/null 2>&1; then
     echo "WiFiRouter V2 Backend is healthy!"
     break
   fi
@@ -86,4 +92,3 @@ echo "  Administration Portal: http://192.168.16.2:8090"
 echo "  Default Username:      admin"
 echo "  Default Password:      admin12345678"
 echo "============================================================"
-
