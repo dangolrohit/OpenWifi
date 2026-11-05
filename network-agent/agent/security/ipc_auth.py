@@ -31,3 +31,4 @@ def verify_token(provided_token: Optional[str], expected_secret: str) -> bool:
     if not provided_token or not expected_secret:
         return False
     return hmac.compare_digest(provided_token.strip(), expected_secret.strip())
+

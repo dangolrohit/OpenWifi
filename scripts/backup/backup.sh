@@ -14,3 +14,4 @@ tar -czf "$ARCHIVE" \
   /etc/NetworkManager/dnsmasq-shared.d 2>/dev/null || true
 
 echo "Backup created successfully: $ARCHIVE"
+

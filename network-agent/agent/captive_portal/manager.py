@@ -116,3 +116,4 @@ class CaptivePortalManager:
                 sessions.pop(ip, None)
             self.save_sessions(sessions)
         return expired
+

@@ -106,3 +106,4 @@ class DhcpManager:
             })
 
         return discovered if discovered else self.mock.get_devices()
+

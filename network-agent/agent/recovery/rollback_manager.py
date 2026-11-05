@@ -61,3 +61,4 @@ class RollbackManager:
             }
             for e in reversed(self.history)
         ]
+

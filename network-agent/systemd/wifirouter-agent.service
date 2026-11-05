@@ -18,3 +18,4 @@ Environment="WIFIROUTER_WAN_IFACE=wlp2s0"
 
 [Install]
 WantedBy=multi-user.target
+

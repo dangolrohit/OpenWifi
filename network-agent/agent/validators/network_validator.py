@@ -68,3 +68,4 @@ def check_host_protection(ip_str: str, host_ips: Set[str]) -> None:
     ip = validate_ipv4(ip_str)
     if ip in host_ips or ip in {"127.0.0.1", "192.168.16.2", "192.168.16.1"}:
         raise NetworkValidationError(f"Cannot apply block policy to host or gateway IP: {ip}")
+

@@ -109,3 +109,4 @@ class DnsActivityManager:
                 except Exception:
                     pass
         return {"ok": cleared, "simulated": False}
+

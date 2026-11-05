@@ -133,3 +133,4 @@ class InterfaceManager:
             logger.warning(f"nmcli scan failed: {exc}")
 
         return self.mock.scan_wifi()
+

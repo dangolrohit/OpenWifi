@@ -54,3 +54,4 @@ class RoutingManager:
             return False
         iface = gw.get("interface", "")
         return iface == expected_iface or iface.startswith("wl") or self.simulated
+

@@ -56,3 +56,4 @@ class AgentController:
             active_sessions = self.captive.get_active_sessions()
             self.firewall.update_guest_sessions(list(active_sessions.keys()))
         return expired
+

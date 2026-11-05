@@ -27,3 +27,4 @@ echo "Restarting NetworkManager to restore baseline connectivity..."
 systemctl restart NetworkManager || true
 
 echo "Rollback completed. Network baseline restored."
+

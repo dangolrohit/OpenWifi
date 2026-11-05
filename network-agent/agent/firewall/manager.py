@@ -226,3 +226,4 @@ class FirewallManager:
         state = self.load_state()
         state["authenticated"] = sorted(list(set(active_ips)))
         self.apply_ruleset(state)
+
