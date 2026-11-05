@@ -40,3 +40,55 @@ If a smartphone does not automatically trigger the "Sign in to network" popup:
 1. Ensure the phone's Wi-Fi settings do not have "Private DNS" enabled (Private DNS uses encrypted port 853, which bypasses standard gateway DNS).
 2. Manually open a browser on the phone and visit `http://connectivitycheck.gstatic.com` or `http://192.168.16.2:8088/guest`.
 
+
+## 5. Browser Wi-Fi scanning
+
+The V2 React page at `/wifi` requests `/api/v1/wifi/scan`. The backend forwards
+this to the privileged Ubuntu host agent. A browser on a secondary laptop sees
+networks near the Ubuntu gateway, not near the secondary laptop. The legacy
+`install.sh` / `web.py` portal has no scanner; use the V2 installation for scanning.
+The development runner deliberately uses simulated networks.
+
+After updating this repository on Ubuntu, update **both** installed components:
+
+```bash
+sudo cp -a network-agent/. /opt/wifirouter/network-agent/
+sudo systemctl restart wifirouter-agent
+sudo docker compose up -d --build
+sudo systemctl status wifirouter-agent --no-pager
+```
+
+Check hardware and scan directly on Ubuntu (replace `wlp2s0` with the actual
+Wi-Fi device from the first command):
+
+```bash
+nmcli device status
+rfkill list
+sudo nmcli --wait 20 -t -f IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY device wifi list ifname wlp2s0 --rescan yes
+sudo journalctl -u wifirouter-agent -n 50 --no-pager
+sudo docker compose logs --tail=50 backend
+```
+
+New installations auto-discover wireless adapters through sysfs. To select a
+specific adapter, create `/etc/wifirouter/agent.env` containing
+`WIFIROUTER_WAN_IFACE=your_interface`. Existing installations may still hard-code
+`wlp2s0`; use `sudo systemctl edit wifirouter-agent` and add:
+
+```ini
+[Service]
+Environment="WIFIROUTER_WAN_IFACE=your_interface"
+```
+
+Then run `sudo systemctl daemon-reload` and `sudo systemctl restart wifirouter-agent`.
+Changing `.env` alone does not configure the host systemd service.
+
+Scans may take up to 35 seconds (NetworkManager plus the iwlist fallback); the
+backend allows 45 seconds. Errors now appear in the page instead of fabricated
+networks or a silent empty list. A successful empty scan displays "No nearby
+networks found." If the agent is unreachable, check that the backend's
+`WIFIROUTER_AGENT_URL` reaches the Ubuntu host and that its agent secret matches
+the host service. Never point a container at its own loopback address for the
+host agent.
+
+The scan command and escaped-field parsing follow the
+[NetworkManager nmcli reference](https://networkmanager.dev/docs/api/latest/nmcli).

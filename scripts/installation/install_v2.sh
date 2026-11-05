@@ -99,7 +99,7 @@ Environment="WIFIROUTER_AGENT_HOST=0.0.0.0"
 Environment="WIFIROUTER_AGENT_PORT=8091"
 Environment="WIFIROUTER_AGENT_SECRET=${AGENT_SECRET_KEY}"
 Environment="WIFIROUTER_LAN_IFACE=enp1s0"
-Environment="WIFIROUTER_WAN_IFACE=wlp2s0"
+EnvironmentFile=-/etc/wifirouter/agent.env
 
 [Install]
 WantedBy=multi-user.target

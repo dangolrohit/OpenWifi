@@ -12,7 +12,35 @@ logger = logging.getLogger("wifirouter.interfaces")
 
 def _parse_nmcli_line(line: str) -> List[str]:
     """Parse colon-delimited line from nmcli -t, unescaping colons inside fields."""
-    return [p.replace(r"\:", ":") for p in re.split(r"(?<!\\):", line)]
+    fields, field = [], []
+    escaped = False
+    for char in line:
+        if escaped:
+            field.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append("".join(field))
+            field = []
+        else:
+            field.append(char)
+    if escaped:
+        field.append("\\")
+    fields.append("".join(field))
+    return fields
+
+
+def _wifi_interface(iface: Optional[str] = None) -> str:
+    """Honor explicit configuration, otherwise discover wireless sysfs devices."""
+    configured = iface or os.environ.get("WIFIROUTER_WAN_IFACE")
+    if configured:
+        return configured
+    for device in sorted(Path("/sys/class/net").iterdir()):
+        if (device / "wireless").exists() or (device / "phy80211").exists():
+            return device.name
+    raise RuntimeError("No Wi-Fi adapter found on the Ubuntu gateway. Check the adapter and driver, or set WIFIROUTER_WAN_IFACE in the agent service.")
+
 
 def _parse_iw_link(out: str) -> Dict[str, Any]:
     """Parse output from `iw dev <iface> link`."""
@@ -149,15 +177,10 @@ class InterfaceManager:
         if self.simulated:
             return self.mock.get_wifi_status()
 
-        target_iface = iface or os.environ.get("WIFIROUTER_WAN_IFACE")
-        if not target_iface:
-            for p in Path("/sys/class/net").glob("wl*"):
-                target_iface = p.name
-                break
-        target_iface = target_iface or "wlp2s0"
+        target_iface = _wifi_interface(iface)
 
         # 1. Discover Wi-Fi local IP if assigned
-        local_ip = "192.168.1.100"
+        local_ip = None
         try:
             res_ip = subprocess.run(["ip", "-j", "addr", "show", target_iface], capture_output=True, text=True, timeout=3)
             if res_ip.returncode == 0:
@@ -172,8 +195,8 @@ class InterfaceManager:
         # 2. Try nmcli
         try:
             res = subprocess.run(
-                ["nmcli", "-t", "-f", "ACTIVE,SSID,BSSID,MODE,FREQ,CHAN,SIGNAL,SECURITY,DEVICE", "device", "wifi"],
-                capture_output=True, text=True, timeout=5
+                ["nmcli", "-t", "-f", "ACTIVE,SSID,BSSID,MODE,FREQ,CHAN,SIGNAL,SECURITY,DEVICE", "device", "wifi", "list", "ifname", target_iface, "--rescan", "no"],
+                capture_output=True, text=True, timeout=5, env={**os.environ, "LC_ALL": "C"}
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -231,64 +254,57 @@ class InterfaceManager:
         except Exception:
             pass
 
-        return self.mock.get_wifi_status()
+        return {"connected": False, "interface": target_iface, "ip": local_ip,
+                "signal_percent": 0, "simulated": False}
 
     def scan_wifi_networks(self, iface: Optional[str] = None) -> List[Dict[str, Any]]:
         """Scan for nearby Wi-Fi access points using nmcli, iw, or iwlist."""
         if self.simulated:
             return self.mock.scan_wifi()
 
-        target_iface = iface or os.environ.get("WIFIROUTER_WAN_IFACE")
-        if not target_iface:
-            for p in Path("/sys/class/net").glob("wl*"):
-                target_iface = p.name
-                break
-        target_iface = target_iface or "wlp2s0"
+        target_iface = _wifi_interface(iface)
 
-        # 1. Try nmcli
-        networks = []
+        # One command requests fresh results and waits for the scan to complete.
+        errors = []
         try:
-            subprocess.run(["nmcli", "device", "wifi", "rescan"], timeout=4, capture_output=True)
             res = subprocess.run(
-                ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY", "device", "wifi"],
-                capture_output=True, text=True, timeout=8
+                ["nmcli", "--wait", "20", "--terse", "--escape", "yes",
+                 "--fields", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY",
+                 "device", "wifi", "list", "ifname", target_iface, "--rescan", "yes"],
+                capture_output=True, text=True, timeout=25,
+                env={**os.environ, "LC_ALL": "C"},
             )
             if res.returncode == 0:
-                seen_ssids = set()
+                networks = []
+                seen_bssids = set()
                 for line in res.stdout.splitlines():
                     parts = _parse_nmcli_line(line)
-                    if len(parts) >= 6:
-                        in_use = (parts[0] == "*")
-                        ssid = parts[1].strip()
-                        if not ssid or ssid in seen_ssids or ssid == "--":
-                            continue
-                        seen_ssids.add(ssid)
-                        chan = int(parts[3]) if parts[3].isdigit() else 1
-                        sig = int(parts[4]) if parts[4].isdigit() else 50
-                        sec = parts[5].strip() if parts[5].strip() else "Open"
-                        networks.append({
-                            "ssid": ssid,
-                            "bssid": parts[2],
-                            "channel": chan,
-                            "signal_percent": sig,
-                            "security": sec,
-                            "in_use": in_use,
-                            "simulated": False
-                        })
-                if networks:
-                    return networks
-        except Exception as exc:
-            logger.debug(f"nmcli scan skipped: {exc}")
+                    if len(parts) != 6 or not parts[2] or parts[2] in seen_bssids:
+                        continue
+                    seen_bssids.add(parts[2])
+                    networks.append({
+                        "ssid": parts[1] or "(Hidden network)",
+                        "bssid": parts[2],
+                        "channel": int(parts[3]) if parts[3].isdigit() else 0,
+                        "signal_percent": int(parts[4]) if parts[4].isdigit() else 0,
+                        "security": parts[5] if parts[5] not in ("", "--") else "Open",
+                        "in_use": parts[0] == "*",
+                        "simulated": False,
+                    })
+                return networks
+            errors.append(res.stderr.strip() or "nmcli scan failed")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(str(exc))
 
-        # 2. Fallback: try iwlist scan
+        # Support adapters managed outside NetworkManager where iwlist is available.
         try:
-            res_iwl = subprocess.run(["iwlist", target_iface, "scan"], capture_output=True, text=True, timeout=8)
-            if res_iwl.returncode == 0:
-                parsed_iwl = _parse_iwlist(res_iwl.stdout)
-                if parsed_iwl:
-                    return parsed_iwl
-        except Exception:
-            pass
-
-        # 3. Fallback to realistic cached AP list if adapter is momentarily busy
-        return self.mock.scan_wifi()
+            res = subprocess.run(["iwlist", target_iface, "scan"],
+                                 capture_output=True, text=True, timeout=10,
+                                 env={**os.environ, "LC_ALL": "C"})
+            if res.returncode == 0:
+                return _parse_iwlist(res.stdout)
+            errors.append(res.stderr.strip() or "iwlist scan failed")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(str(exc))
+        raise RuntimeError(f"Wi-Fi scan failed on {target_iface}: {'; '.join(errors)}. "
+                           "Check NetworkManager, rfkill, and the agent service permissions on Ubuntu.")

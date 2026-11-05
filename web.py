@@ -145,20 +145,20 @@ class Handler(BaseHTTPRequestHandler):
         if not self.valid_host(): return
         assets = {'/style.css': ('style.css', 'text/css'), '/app.js': ('app.js', 'text/javascript')}
         if self.path in assets:
-            name, kind = assets[self.path]; self.respond(200, (ROOT / name).read_text(), kind); return
+            name, kind = assets[self.path]; self.respond(200, (ROOT / name).read_text(encoding='utf-8'), kind); return
         if self.path == '/login':
             token, s = self.session()
             if s and s['auth']: self.respond(303, '', 'text/plain', location='/dashboard'); return
             try:
                 if not s: token, s = new_session()
-                self.respond(200, (ROOT / 'login.html').read_text().replace('__CSRF__', s['csrf']), 'text/html', cookie=token)
+                self.respond(200, (ROOT / 'login.html').read_text(encoding='utf-8').replace('__CSRF__', s['csrf']), 'text/html', cookie=token)
             except ValueError as e: self.respond(429, {'error': str(e)})
             return
         token, s = self.auth()
         if not s: return
         clean_path = self.path.split('?')[0]
         if clean_path in PAGES:
-            self.respond(200, (ROOT / 'portal.html').read_text().replace('__CSRF__', s['csrf']), 'text/html')
+            self.respond(200, (ROOT / 'portal.html').read_text(encoding='utf-8').replace('__CSRF__', s['csrf']), 'text/html')
         elif clean_path == '/api/devices':
             try: self.respond(200, {'devices': devices(), 'client': self.client_address[0]})
             except Exception as e: self.respond(503, {'error': str(e)})
@@ -359,7 +359,7 @@ class CaptiveHandler(BaseHTTPRequestHandler):
         if clean_path in ('/', '/guest'):
             guest_html = ROOT / 'guest.html'
             if guest_html.exists():
-                self.respond(200, guest_html.read_text(), 'text/html')
+                self.respond(200, guest_html.read_text(encoding='utf-8'), 'text/html')
             else:
                 self.respond(200, '<h1>OshinWiFi Guest Hotspot</h1>', 'text/html')
             return

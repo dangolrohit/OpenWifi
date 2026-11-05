@@ -39,7 +39,8 @@ http://192.168.16.2:8090
 ```bash
 cd ~/WiFiRouter
 git pull --ff-only
-sudo docker compose up -d --build
+sudo cp -a network-agent/. /opt/wifirouter/network-agent/
 sudo systemctl restart wifirouter-agent
+sudo docker compose up -d --build
 ```
 

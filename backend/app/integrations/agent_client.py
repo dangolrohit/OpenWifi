@@ -1,10 +1,15 @@
 """Async client for communicating with the privileged network-agent service."""
 import logging
+import os
 from typing import Any, Dict, List, Optional
 import httpx
 from ..core.config import settings
 
 logger = logging.getLogger("wifirouter.agent_client")
+
+class AgentUnavailableError(RuntimeError):
+    """The host agent could not supply real Wi-Fi data."""
+
 
 class NetworkAgentClient:
     """Async HTTP client to network-agent daemon with in-process simulation fallback."""
@@ -37,8 +42,11 @@ class NetworkAgentClient:
             "Content-Type": "application/json"
         }
 
+        wifi_request = endpoint.rstrip("/") in ("/wifi/status", "/wifi/scan")
+        timeout = 45.0 if endpoint.rstrip("/") == "/wifi/scan" else 15.0 if wifi_request else 5.0
+        failure = "Ubuntu network agent is unavailable. Check wifirouter-agent.service and the agent URL/secret."
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 if method.upper() == "GET":
                     resp = await client.get(url, headers=headers, params=params)
                 else:
@@ -48,8 +56,17 @@ class NetworkAgentClient:
                     return resp.json()
                 else:
                     logger.warning(f"Agent daemon HTTP {resp.status_code} ({url}): {resp.text}")
+                    if wifi_request:
+                        try:
+                            failure = resp.json().get("error") or failure
+                        except ValueError:
+                            pass
         except Exception as exc:
-            logger.warning(f"HTTP request to agent daemon ({url}) failed: {exc}. Using fallback...")
+            logger.warning(f"HTTP request to agent daemon ({url}) failed: {exc}")
+
+        # Wi-Fi must come from the host daemon, never from a container or fake AP list.
+        if wifi_request and os.environ.get("WIFIROUTER_SIMULATE", "").lower() not in ("1", "true", "yes"):
+            raise AgentUnavailableError(failure)
 
         # Fallback to in-process controller if available
         ctrl = self._get_fallback_controller()

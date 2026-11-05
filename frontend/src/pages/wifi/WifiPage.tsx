@@ -1,19 +1,21 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wifi, RefreshCw, Lock, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Wifi, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/elements/buttons/Button';
 import { Badge } from '@/elements/badges/Badge';
 import { api } from '@/services/api';
 
 export const WifiPage: React.FC = () => {
-  const { data: status, isLoading: statusLoading, refetch: refetchStatus } = useQuery({
+  const { data: status, error: statusError, refetch: refetchStatus } = useQuery({
     queryKey: ['wifiStatus'],
     queryFn: api.wifi.getStatus,
   });
 
-  const { data: scanData, isLoading: scanLoading, refetch: rescan } = useQuery({
+  const { data: scanData, isFetching: scanLoading, error: scanError, refetch: rescan } = useQuery({
     queryKey: ['wifiScan'],
     queryFn: api.wifi.scan,
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 
   return (
@@ -41,6 +43,15 @@ export const WifiPage: React.FC = () => {
         </Button>
       </div>
 
+      {(scanError || statusError) && (
+        <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          {scanError ? `Scan failed: ${scanError.message}` : `Wi-Fi status unavailable: ${statusError?.message}`}
+        </div>
+      )}
+      {(status?.simulated || scanData?.networks.some(net => net.simulated)) && (
+        <p className="text-sm text-amber-700">Simulation mode: these are demonstration networks, not a live Ubuntu scan.</p>
+      )}
+
       {/* Primary Connection Banner */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
         <div className="flex items-center justify-between mb-4">
@@ -50,10 +61,10 @@ export const WifiPage: React.FC = () => {
             </div>
             <div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                {status?.ssid || 'Searching for connection...'}
+                {status?.ssid || 'No active Wi-Fi connection'}
               </h3>
               <p className="text-xs text-slate-500">
-                Interface: {status?.interface || 'wlp2s0'} · BSSID: {status?.bssid || 'N/A'}
+                Interface: {status?.interface || 'Unknown'} · BSSID: {status?.bssid || 'N/A'}
               </p>
             </div>
           </div>
@@ -72,19 +83,19 @@ export const WifiPage: React.FC = () => {
           <div>
             <p className="text-xs text-slate-500">Frequency & Channel</p>
             <p className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-              CH {status?.channel || 36} ({status?.frequency_mhz || 5000} MHz)
+              CH {status?.channel ?? 'N/A'} ({status?.frequency_mhz ?? 'N/A'} MHz)
             </p>
           </div>
           <div>
             <p className="text-xs text-slate-500">Local IP / Subnet</p>
             <p className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-              {status?.ip || '192.168.1.100'} / 24
+              {status?.ip || 'Not assigned'}
             </p>
           </div>
           <div>
             <p className="text-xs text-slate-500">Security Mode</p>
             <p className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-              {status?.security || 'WPA2-PSK'}
+              {status?.security || 'Unknown'}
             </p>
           </div>
         </div>
@@ -108,6 +119,10 @@ export const WifiPage: React.FC = () => {
           Nearby Wireless Networks
         </h3>
 
+        {scanLoading && <p role="status" className="text-sm text-slate-500">Scanning on the Ubuntu gateway...</p>}
+        {!scanLoading && !scanError && scanData?.networks.length === 0 && (
+          <p className="text-sm text-slate-500">No nearby networks found. Check that the Ubuntu Wi-Fi radio is enabled, then rescan.</p>
+        )}
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
           {(scanData?.networks || []).map((net) => (
             <div key={net.bssid} className="py-3.5 flex items-center justify-between">
