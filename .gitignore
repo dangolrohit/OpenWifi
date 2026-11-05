@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+*.pem
+*.key
+auth.json
+blocked.json
+*.tar.gz
+*.log
