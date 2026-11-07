@@ -61,6 +61,7 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertIn("internet_status", first_dev)
             self.assertIn("internet_label", first_dev)
             self.assertIn("is_internet_active", first_dev)
+            self.assertIn("is_online", first_dev)
 
         # 5. Check /api/v1/guests/plans
         plans_resp = self.client.get("/api/v1/guests/plans", cookies=cookies)

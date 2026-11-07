@@ -112,13 +112,12 @@ class DeviceService:
         """Fetch all known devices from database merged with live discovery and plan status."""
         discovered = await agent_client.discover_devices()
         now = datetime.now(timezone.utc)
+        discovered_by_ip = {d.get("ip"): d for d in discovered if d.get("ip")}
 
         # Map discovered devices by IP/MAC
-        for d in discovered:
-            ip = d.get("ip")
+        for ip, d in discovered_by_ip.items():
             mac = d.get("mac", "")
-            if not ip:
-                continue
+            is_dev_online = bool(d.get("is_online", d.get("status") in ("REACHABLE", "DELAY", "PERMANENT")))
 
             stmt = select(Device).where(Device.ip == ip)
             res = await db.execute(stmt)
@@ -126,7 +125,8 @@ class DeviceService:
 
             if existing:
                 existing.status = d.get("status", "REACHABLE")
-                existing.last_seen = now
+                if is_dev_online:
+                    existing.last_seen = now
                 if mac and not existing.mac:
                     existing.mac = mac
                 if d.get("hostname") and not existing.hostname:
@@ -169,6 +169,14 @@ class DeviceService:
                 latest_session_by_ip[s.ip] = s
 
         for dev in devices:
+            disc_info = discovered_by_ip.get(dev.ip)
+            if disc_info:
+                dev.is_online = bool(disc_info.get("is_online", disc_info.get("status") in ("REACHABLE", "DELAY", "PERMANENT"))) and not dev.is_blocked
+                dev.status = disc_info.get("status", dev.status)
+            else:
+                dev.is_online = False
+                dev.status = "DISCONNECTED"
+
             session = latest_session_by_ip.get(dev.ip)
             DeviceService._enrich_device(dev, plans, session, now)
 
@@ -256,6 +264,7 @@ class DeviceService:
         res_sess = await db.execute(stmt_sess)
         latest_sess = res_sess.scalar_one_or_none()
         DeviceService._enrich_device(dev, plans, latest_sess, datetime.now(timezone.utc))
+        dev.is_online = (dev.status in ("REACHABLE", "DELAY", "PERMANENT")) and not dev.is_blocked
 
         return dev
 
@@ -290,5 +299,6 @@ class DeviceService:
         res_sess = await db.execute(stmt_sess)
         latest_sess = res_sess.scalar_one_or_none()
         DeviceService._enrich_device(dev, plans, latest_sess, datetime.now(timezone.utc))
+        dev.is_online = (dev.status in ("REACHABLE", "DELAY", "PERMANENT")) and not dev.is_blocked
 
         return dev

@@ -43,6 +43,9 @@ class DeviceResponse(BaseModel):
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
 
+    # Real-time connectivity
+    is_online: bool = False
+
     # Hotspot plan & live internet policy
     plan_id: Optional[str] = None
     plan_name: Optional[str] = None

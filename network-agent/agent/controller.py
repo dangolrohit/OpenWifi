@@ -41,11 +41,13 @@ class AgentController:
         fw_status = self.firewall.get_status()
         guests = self.captive.get_active_sessions()
 
+        online_devices = [d for d in devices if d.get("is_online", d.get("status") in ("REACHABLE", "DELAY", "PERMANENT"))]
+
         return {
             "bandwidth": bw,
             "wifi": wifi,
             "health": health,
-            "connected_device_count": len(devices),
+            "connected_device_count": len(online_devices),
             "blocked_device_count": len(fw_status.get("blocked", [])),
             "active_guest_count": len(guests),
             "timestamp": time.time()

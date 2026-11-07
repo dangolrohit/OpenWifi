@@ -34,6 +34,9 @@ export interface Device {
   first_seen?: string;
   last_seen?: string;
 
+  // Real-time connectivity
+  is_online?: boolean;
+
   // Hotspot plan & live internet status
   plan_id?: string;
   plan_name?: string;
