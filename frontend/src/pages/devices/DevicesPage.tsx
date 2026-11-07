@@ -11,8 +11,14 @@ import {
   Edit2,
   Eye,
   CheckCircle,
+  Wifi,
+  AlertTriangle,
+  Lock,
+  PlusCircle,
+  Zap,
+  XCircle,
 } from 'lucide-react';
-import { Device } from '@/types';
+import { Device, HotspotPlan } from '@/types';
 import { api } from '@/services/api';
 import { Badge } from '@/elements/badges/Badge';
 import { Button } from '@/elements/buttons/Button';
@@ -22,7 +28,7 @@ import { DeviceActivityModal } from './DeviceActivityModal';
 export const DevicesPage: React.FC = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  const [groupFilter, setGroupFilter] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [viewingDevice, setViewingDevice] = useState<Device | null>(null);
 
@@ -30,6 +36,11 @@ export const DevicesPage: React.FC = () => {
     queryKey: ['devices'],
     queryFn: api.devices.list,
     refetchInterval: 5000,
+  });
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ['hotspotPlans'],
+    queryFn: api.guests.getPlans,
   });
 
   const updateMutation = useMutation({
@@ -47,18 +58,55 @@ export const DevicesPage: React.FC = () => {
     },
   });
 
+  const grantMutation = useMutation({
+    mutationFn: ({ ip, plan_id }: { ip: string; plan_id: string }) =>
+      api.devices.grantPlan(ip, plan_id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['devices'] });
+    },
+  });
+
+  const extendMutation = useMutation({
+    mutationFn: ({ ip, minutes }: { ip: string; minutes: number }) =>
+      api.devices.extendTime(ip, minutes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['devices'] });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (ip: string) => api.devices.revokeInternet(ip),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['devices'] });
+    },
+  });
+
+  // Calculate statistics
+  const totalCount = devices.length;
+  const activeCount = devices.filter((d) => d.internet_status === 'active' || d.internet_status === 'unlimited').length;
+  const expiredCount = devices.filter((d) => d.internet_status === 'expired').length;
+  const captiveCount = devices.filter((d) => d.internet_status === 'unauthorized').length;
+  const blockedCount = devices.filter((d) => d.is_blocked).length;
+
   const filteredDevices = devices.filter((d) => {
     const matchesSearch =
       (d.nickname || '').toLowerCase().includes(search.toLowerCase()) ||
       (d.hostname || '').toLowerCase().includes(search.toLowerCase()) ||
       d.ip.includes(search) ||
-      d.mac.toLowerCase().includes(search.toLowerCase());
+      d.mac.toLowerCase().includes(search.toLowerCase()) ||
+      (d.plan_name || '').toLowerCase().includes(search.toLowerCase());
 
-    const matchesGroup =
-      groupFilter === 'all' ||
-      (groupFilter === 'blocked' ? d.is_blocked : d.group === groupFilter);
+    if (!matchesSearch) return false;
 
-    return matchesSearch && matchesGroup;
+    if (filterType === 'all') return true;
+    if (filterType === 'active') return d.internet_status === 'active' || d.internet_status === 'unlimited';
+    if (filterType === 'expired') return d.internet_status === 'expired';
+    if (filterType === 'captive') return d.internet_status === 'unauthorized';
+    if (filterType === 'family') return d.group === 'family' || d.group === 'staff';
+    if (filterType === 'customer') return d.group === 'customer';
+    if (filterType === 'blocked') return d.is_blocked;
+
+    return true;
   });
 
   return (
@@ -69,8 +117,41 @@ export const DevicesPage: React.FC = () => {
           Connected Devices
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Monitor and configure individual connected devices, bandwidth limits, and curfew access rules.
+          Monitor individual devices, live hotspot plans, time limits, and internet access policies.
         </p>
+      </div>
+
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Discovered</p>
+          <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1">{totalCount}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Connected on LAN/Wi-Fi</p>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+          <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Wifi className="w-3.5 h-3.5" /> Internet Active
+          </p>
+          <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">{activeCount}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Whitelisted or Authorized</p>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+          <p className="text-xs font-semibold text-rose-600 dark:text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5" /> Time Exceeded
+          </p>
+          <p className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1">{expiredCount}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Plan expired · Disconnected</p>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+          <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5" /> Captive Gate
+          </p>
+          <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{captiveCount}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Needs Login / Voucher</p>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}
@@ -79,7 +160,7 @@ export const DevicesPage: React.FC = () => {
           <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by nickname, IP, MAC address..."
+            placeholder="Search by nickname, IP, MAC address, plan..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-brand-500"
@@ -87,17 +168,25 @@ export const DevicesPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-          {['all', 'family', 'customer', 'staff', 'blocked'].map((g) => (
+          {[
+            { id: 'all', label: `All (${totalCount})` },
+            { id: 'active', label: `Active (${activeCount})` },
+            { id: 'expired', label: `Expired (${expiredCount})` },
+            { id: 'captive', label: `Captive (${captiveCount})` },
+            { id: 'family', label: 'Family & Staff' },
+            { id: 'customer', label: 'Customers' },
+            { id: 'blocked', label: `Blocked (${blockedCount})` },
+          ].map((f) => (
             <button
-              key={g}
-              onClick={() => setGroupFilter(g)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors ${
-                groupFilter === g
+              key={f.id}
+              onClick={() => setFilterType(f.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors whitespace-nowrap ${
+                filterType === f.id
                   ? 'bg-brand-600 text-white'
-                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800 hover:bg-slate-50'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
               }`}
             >
-              {g}
+              {f.label}
             </button>
           ))}
         </div>
@@ -110,16 +199,17 @@ export const DevicesPage: React.FC = () => {
             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
               <tr>
                 <th className="px-6 py-3.5">Device Identity</th>
-                <th className="px-6 py-3.5">IP / MAC</th>
+                <th className="px-6 py-3.5">IP Address</th>
                 <th className="px-6 py-3.5">Network Group</th>
-                <th className="px-6 py-3.5">Policy / Limits</th>
-                <th className="px-6 py-3.5">Status</th>
+                <th className="px-6 py-3.5">Hotspot Plan & Limits</th>
+                <th className="px-6 py-3.5">Internet Status</th>
                 <th className="px-6 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {filteredDevices.map((d) => (
                 <tr key={d.ip} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                  {/* Identity */}
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300">
@@ -133,10 +223,14 @@ export const DevicesPage: React.FC = () => {
                       </div>
                     </div>
                   </td>
+
+                  {/* IP & MAC */}
                   <td className="px-6 py-4">
-                    <div className="font-mono text-xs font-medium text-slate-900 dark:text-slate-100">{d.ip}</div>
+                    <div className="font-mono text-xs font-semibold text-slate-900 dark:text-slate-100">{d.ip}</div>
                     <div className="font-mono text-[11px] text-slate-400">{d.mac}</div>
                   </td>
+
+                  {/* Network Group */}
                   <td className="px-6 py-4">
                     <Badge
                       variant={
@@ -146,36 +240,128 @@ export const DevicesPage: React.FC = () => {
                       {d.group.toUpperCase()}
                     </Badge>
                   </td>
+
+                  {/* Plan & Limits */}
                   <td className="px-6 py-4">
-                    <div className="space-y-1 text-xs">
-                      {d.speed_limit_mbps > 0 ? (
-                        <span className="flex items-center gap-1 text-sky-600 dark:text-sky-400 font-semibold">
-                          <Gauge className="w-3.5 h-3.5" /> {d.speed_limit_mbps} Mbps Limit
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">Unlimited Speed</span>
-                      )}
+                    <div className="space-y-0.5">
+                      <div className="font-semibold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        {d.plan_name || 'No Plan (Captive Portal)'}
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        {d.speed_limit_mbps > 0 ? (
+                          <span className="flex items-center gap-1 text-sky-600 dark:text-sky-400 font-medium">
+                            <Gauge className="w-3.5 h-3.5" /> {d.speed_limit_mbps} Mbps Limit
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">Unlimited Speed</span>
+                        )}
+                      </div>
+
                       {d.schedule_enabled && (
-                        <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold">
-                          <Clock className="w-3.5 h-3.5" /> Curfew: {d.schedule_start}–{d.schedule_end}
-                        </span>
+                        <div className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                          <Clock className="w-3 h-3" /> Curfew: {d.schedule_start}–{d.schedule_end}
+                        </div>
                       )}
                     </div>
                   </td>
+
+                  {/* Live Internet Access Status */}
                   <td className="px-6 py-4">
                     {d.is_blocked ? (
-                      <Badge variant="danger">BLOCKED</Badge>
+                      <div>
+                        <Badge variant="danger" className="flex items-center gap-1">
+                          <ShieldAlert className="w-3 h-3" /> BLOCKED
+                        </Badge>
+                        <div className="text-[11px] text-rose-500 font-medium mt-0.5">Firewall Drop</div>
+                      </div>
+                    ) : d.internet_status === 'curfew' ? (
+                      <div>
+                        <Badge variant="warning" className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" /> CURFEW
+                        </Badge>
+                        <div className="text-[11px] text-amber-600 font-medium mt-0.5">Bedtime Paused</div>
+                      </div>
+                    ) : d.internet_status === 'unlimited' ? (
+                      <div>
+                        <Badge variant="success" className="flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" /> UNLIMITED
+                        </Badge>
+                        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">Whitelisted</div>
+                      </div>
+                    ) : d.internet_status === 'active' ? (
+                      <div>
+                        <Badge variant="success" className="flex items-center gap-1">
+                          <Wifi className="w-3 h-3" /> ACTIVE
+                        </Badge>
+                        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold mt-0.5">
+                          {d.time_remaining_str}
+                        </div>
+                      </div>
+                    ) : d.internet_status === 'expired' ? (
+                      <div>
+                        <Badge variant="danger" className="flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" /> EXPIRED
+                        </Badge>
+                        <div className="text-[11px] text-rose-600 dark:text-rose-400 font-bold mt-0.5">
+                          Time Limit Exceeded
+                        </div>
+                      </div>
                     ) : (
-                      <Badge variant="success">ONLINE</Badge>
+                      <div>
+                        <Badge variant="warning" className="flex items-center gap-1">
+                          <Lock className="w-3 h-3" /> CAPTIVE
+                        </Badge>
+                        <div className="text-[11px] text-amber-600 dark:text-amber-400 font-medium mt-0.5">
+                          Login Required
+                        </div>
+                      </div>
                     )}
                   </td>
-                  <td className="px-6 py-4 text-right space-x-2">
+
+                  {/* Actions */}
+                  <td className="px-6 py-4 text-right space-x-1.5 whitespace-nowrap">
+                    {/* Quick Hotspot Action */}
+                    {d.internet_status === 'active' ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => extendMutation.mutate({ ip: d.ip, minutes: 30 })}
+                          title="Extend session by +30 minutes"
+                        >
+                          +30m
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-rose-600 hover:text-rose-700 hover:border-rose-300"
+                          onClick={() => revokeMutation.mutate(d.ip)}
+                          title="Cut off / revoke internet access"
+                        >
+                          Revoke
+                        </Button>
+                      </>
+                    ) : (d.internet_status === 'expired' || d.internet_status === 'unauthorized') && !d.is_blocked ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-emerald-600 hover:text-emerald-700 hover:border-emerald-300"
+                        onClick={() => grantMutation.mutate({ ip: d.ip, plan_id: 'starter' })}
+                        title="Grant 30 minutes free Starter Plan"
+                      >
+                        <Zap className="w-3.5 h-3.5 mr-1" /> Grant 30m
+                      </Button>
+                    ) : null}
+
                     <Button variant="outline" size="sm" onClick={() => setViewingDevice(d)} aria-label={`View activity for ${d.nickname || d.hostname || d.ip}`}>
                       <Eye className="w-3.5 h-3.5" /> View
                     </Button>
+
                     <Button variant="outline" size="sm" onClick={() => setEditingDevice(d)}>
                       <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit
                     </Button>
+
                     <Button
                       variant={d.is_blocked ? 'secondary' : 'danger'}
                       size="sm"
@@ -213,12 +399,16 @@ export const DevicesPage: React.FC = () => {
             onSubmit={(e) => {
               e.preventDefault();
               const fd = new FormData(e.currentTarget);
+              const assignPlan = fd.get('assign_plan') as string;
               updateMutation.mutate({
                 ip: editingDevice.ip,
                 updates: {
                   nickname: fd.get('nickname') as string,
                   group: fd.get('group') as string,
                   speed_limit_mbps: parseInt(fd.get('speed_limit') as string, 10) || 0,
+                  assign_plan_id: assignPlan && assignPlan !== 'none' ? assignPlan : undefined,
+                  extend_minutes: assignPlan === 'extend_30' ? 30 : assignPlan === 'extend_60' ? 60 : undefined,
+                  revoke_internet: assignPlan === 'revoke',
                   schedule: {
                     enabled: fd.get('sched_enabled') === 'on',
                     start: fd.get('sched_start') as string,
@@ -256,6 +446,31 @@ export const DevicesPage: React.FC = () => {
                 <option value="staff">Staff (Whitelisted Work Device)</option>
                 <option value="default">Default Guest</option>
               </select>
+            </div>
+
+            {/* Hotspot Plan Control */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                Hotspot Plan & Access Action
+              </label>
+              <select
+                name="assign_plan"
+                defaultValue="none"
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm"
+              >
+                <option value="none">-- Keep Current Session / Policy --</option>
+                <option value="starter">Grant Starter Plan (Free 30 Minutes)</option>
+                <option value="standard">Grant Standard 2-Hour Plan</option>
+                <option value="half_day">Grant Half-Day Pass (6 Hours)</option>
+                <option value="full_day">Grant Full-Day Pass (24 Hours)</option>
+                <option value="vip">Grant VIP Premium Pass (3 Days)</option>
+                <option value="extend_30">Add +30 Minutes to Current Session</option>
+                <option value="extend_60">Add +60 Minutes to Current Session</option>
+                <option value="revoke">Revoke / Cut Off Internet Access Immediately</option>
+              </select>
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Current Plan: {editingDevice.plan_name || 'No Plan'} · Status: {editingDevice.internet_label || 'Offline'}
+              </span>
             </div>
 
             <div>
@@ -321,4 +536,3 @@ export const DevicesPage: React.FC = () => {
     </div>
   );
 };
-

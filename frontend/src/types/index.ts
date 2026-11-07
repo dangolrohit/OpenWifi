@@ -33,6 +33,17 @@ export interface Device {
   tx_bytes: number;
   first_seen?: string;
   last_seen?: string;
+
+  // Hotspot plan & live internet status
+  plan_id?: string;
+  plan_name?: string;
+  internet_status?: 'active' | 'expired' | 'unauthorized' | 'unlimited' | 'curfew' | 'blocked';
+  internet_label?: string;
+  time_remaining_sec?: number;
+  time_remaining_str?: string;
+  session_expires_at?: string;
+  is_internet_active?: boolean;
+  policy_desc?: string;
 }
 
 export interface HotspotPlan {

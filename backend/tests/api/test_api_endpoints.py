@@ -53,7 +53,14 @@ class ApiEndpointTests(unittest.TestCase):
         # 4. Check /api/v1/devices
         dev_resp = self.client.get("/api/v1/devices", cookies=cookies)
         self.assertEqual(dev_resp.status_code, 200)
-        self.assertIsInstance(dev_resp.json(), list)
+        devices_list = dev_resp.json()
+        self.assertIsInstance(devices_list, list)
+        if devices_list:
+            first_dev = devices_list[0]
+            self.assertIn("plan_name", first_dev)
+            self.assertIn("internet_status", first_dev)
+            self.assertIn("internet_label", first_dev)
+            self.assertIn("is_internet_active", first_dev)
 
         # 5. Check /api/v1/guests/plans
         plans_resp = self.client.get("/api/v1/guests/plans", cookies=cookies)

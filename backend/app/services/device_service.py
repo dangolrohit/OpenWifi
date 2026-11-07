@@ -1,11 +1,13 @@
 """Device management service orchestrating DB persistence and agent firewall sync."""
-from datetime import datetime, timezone, time as dtime
+from datetime import datetime, timezone, timedelta, time as dtime
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.device import Device
+from ..models.guest import HotspotPlan, GuestSession
 from ..models.audit import AuditLog
 from ..integrations.agent_client import agent_client
+from .guest_service import GuestService
 
 class DeviceService:
     """Synchronizes detected devices with persistent configuration, groups, and policies."""
@@ -29,8 +31,85 @@ class DeviceService:
         return now_min >= start_min or now_min < end_min
 
     @staticmethod
+    def _enrich_device(dev: Device, plans: Dict[str, HotspotPlan], session: Optional[GuestSession], now_utc: datetime):
+        """Enrich a Device object with live plan information, internet status, and policy descriptions."""
+        curfew_active = dev.schedule_enabled and DeviceService._is_curfew_active(dev.schedule_start, dev.schedule_end)
+
+        if dev.is_blocked:
+            dev.plan_id = None
+            dev.plan_name = "Blocked"
+            dev.internet_status = "blocked"
+            dev.internet_label = "Access Blocked"
+            dev.time_remaining_sec = 0
+            dev.time_remaining_str = "Blocked"
+            dev.session_expires_at = None
+            dev.is_internet_active = False
+            dev.policy_desc = "Drop all packets · Blocked by Admin"
+        elif curfew_active:
+            dev.plan_id = None
+            dev.plan_name = "Curfew Active"
+            dev.internet_status = "curfew"
+            dev.internet_label = f"Curfew Active ({dev.schedule_start}–{dev.schedule_end})"
+            dev.time_remaining_sec = 0
+            dev.time_remaining_str = "Curfew Restricted"
+            dev.session_expires_at = None
+            dev.is_internet_active = False
+            dev.policy_desc = f"Curfew enforced from {dev.schedule_start} to {dev.schedule_end} · Internet Paused"
+        elif dev.group in ("family", "staff"):
+            dev.plan_id = "family"
+            dev.plan_name = f"{dev.group.capitalize()} Whitelist"
+            dev.internet_status = "unlimited"
+            dev.internet_label = "Internet Active (Whitelisted)"
+            dev.time_remaining_sec = None
+            dev.time_remaining_str = "Permanent / Unlimited"
+            dev.session_expires_at = None
+            dev.is_internet_active = True
+            dev.policy_desc = f"{dev.speed_limit_mbps} Mbps Limit" if dev.speed_limit_mbps > 0 else "Unlimited Speed · Captive Bypassed"
+        elif session:
+            expiry = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
+            plan = plans.get(session.plan_id)
+            plan_title = plan.name if plan else session.plan_id.capitalize()
+
+            if session.is_active and expiry > now_utc:
+                rem_sec = max(0, int((expiry - now_utc).total_seconds()))
+                rem_mins = rem_sec // 60
+                rem_hours = rem_mins // 60
+                time_str = f"{rem_hours}h {rem_mins % 60}m left" if rem_hours > 0 else f"{rem_mins}m left"
+
+                dev.plan_id = session.plan_id
+                dev.plan_name = plan_title
+                dev.internet_status = "active"
+                dev.internet_label = f"Internet Active · {time_str}"
+                dev.time_remaining_sec = rem_sec
+                dev.time_remaining_str = time_str
+                dev.session_expires_at = expiry
+                dev.is_internet_active = True
+                eff_speed = dev.speed_limit_mbps or session.speed_limit_mbps
+                dev.policy_desc = f"{eff_speed} Mbps Plan Limit · Active until {expiry.strftime('%H:%M')}"
+            else:
+                dev.plan_id = session.plan_id
+                dev.plan_name = f"{plan_title} (Expired)"
+                dev.internet_status = "expired"
+                dev.internet_label = "Time Exceeded / Expired"
+                dev.time_remaining_sec = 0
+                dev.time_remaining_str = "0m (Expired)"
+                dev.session_expires_at = expiry
+                dev.is_internet_active = False
+                dev.policy_desc = f"Plan duration exceeded at {expiry.strftime('%H:%M')} · Voucher required"
+        else:
+            dev.plan_id = None
+            dev.plan_name = "No Plan (Captive Portal)"
+            dev.internet_status = "unauthorized"
+            dev.internet_label = "Portal Login Required"
+            dev.time_remaining_sec = 0
+            dev.time_remaining_str = "Not Authenticated"
+            dev.session_expires_at = None
+            dev.is_internet_active = False
+            dev.policy_desc = "Connected to Wi-Fi · Captive portal agreement or voucher required"
+
+    @staticmethod
     async def get_all_devices(db: AsyncSession) -> List[Device]:
-        """Fetch all known devices from database merged with live discovery."""
+        """Fetch all known devices from database merged with live discovery and plan status."""
         discovered = await agent_client.discover_devices()
         now = datetime.now(timezone.utc)
 
@@ -75,7 +154,25 @@ class DeviceService:
         # Query all devices
         stmt = select(Device).order_by(Device.last_seen.desc())
         res = await db.execute(stmt)
-        return list(res.scalars().all())
+        devices = list(res.scalars().all())
+
+        # Fetch plans and latest guest sessions to enrich devices
+        plans_list = await GuestService.get_plans(db)
+        plans = {p.plan_id: p for p in plans_list}
+
+        stmt_sess = select(GuestSession).order_by(GuestSession.id.desc())
+        res_sess = await db.execute(stmt_sess)
+        all_sessions = res_sess.scalars().all()
+        latest_session_by_ip: Dict[str, GuestSession] = {}
+        for s in all_sessions:
+            if s.ip not in latest_session_by_ip:
+                latest_session_by_ip[s.ip] = s
+
+        for dev in devices:
+            session = latest_session_by_ip.get(dev.ip)
+            DeviceService._enrich_device(dev, plans, session, now)
+
+        return devices
 
     @staticmethod
     async def update_device(db: AsyncSession, ip: str, updates: Dict[str, Any], actor: str = "admin") -> Device:
@@ -104,6 +201,45 @@ class DeviceService:
             dev.schedule_start = sched.get("start", "22:00")
             dev.schedule_end = sched.get("end", "06:00")
 
+        # Plan Assignment or Extension
+        plans_list = await GuestService.get_plans(db)
+        plans = {p.plan_id: p for p in plans_list}
+
+        if updates.get("assign_plan_id"):
+            pid = updates["assign_plan_id"]
+            if pid == "revoke":
+                await GuestService.revoke_session(db, ip, actor=actor)
+            elif pid in ("family", "staff"):
+                dev.group = pid
+                await agent_client.set_group(ip, pid)
+            elif pid in plans:
+                target_plan = plans[pid]
+                now_utc = datetime.now(timezone.utc)
+                exp_utc = now_utc + timedelta(minutes=target_plan.duration_minutes)
+                await db.execute(update(GuestSession).where(GuestSession.ip == ip).values(is_active=False))
+                new_session = GuestSession(
+                    ip=ip,
+                    mac=dev.mac,
+                    plan_id=target_plan.plan_id,
+                    speed_limit_mbps=target_plan.speed_limit_mbps,
+                    authorized_at=now_utc,
+                    expires_at=exp_utc,
+                    is_active=True
+                )
+                db.add(new_session)
+                await agent_client.authorize_guest(
+                    ip, target_plan.plan_id, target_plan.duration_minutes, target_plan.speed_limit_mbps
+                )
+
+        if updates.get("extend_minutes"):
+            try:
+                await GuestService.extend_session(db, ip, additional_minutes=int(updates["extend_minutes"]), actor=actor)
+            except Exception:
+                pass
+
+        if updates.get("revoke_internet"):
+            await GuestService.revoke_session(db, ip, actor=actor)
+
         audit = AuditLog(
             event_type="DEVICE_UPDATED",
             actor=actor,
@@ -114,6 +250,13 @@ class DeviceService:
         db.add(audit)
         await db.commit()
         await db.refresh(dev)
+
+        # Enrich updated dev before returning
+        stmt_sess = select(GuestSession).where(GuestSession.ip == ip).order_by(GuestSession.id.desc()).limit(1)
+        res_sess = await db.execute(stmt_sess)
+        latest_sess = res_sess.scalar_one_or_none()
+        DeviceService._enrich_device(dev, plans, latest_sess, datetime.now(timezone.utc))
+
         return dev
 
     @staticmethod
@@ -140,5 +283,12 @@ class DeviceService:
         db.add(audit)
         await db.commit()
         await db.refresh(dev)
-        return dev
 
+        plans_list = await GuestService.get_plans(db)
+        plans = {p.plan_id: p for p in plans_list}
+        stmt_sess = select(GuestSession).where(GuestSession.ip == ip).order_by(GuestSession.id.desc()).limit(1)
+        res_sess = await db.execute(stmt_sess)
+        latest_sess = res_sess.scalar_one_or_none()
+        DeviceService._enrich_device(dev, plans, latest_sess, datetime.now(timezone.utc))
+
+        return dev

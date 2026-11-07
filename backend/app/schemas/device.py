@@ -15,6 +15,9 @@ class DeviceUpdateRequest(BaseModel):
     speed_limit_mbps: Optional[int] = Field(None, ge=0, le=10000)
     is_trusted: Optional[bool] = None
     schedule: Optional[ScheduleSchema] = None
+    assign_plan_id: Optional[str] = None
+    extend_minutes: Optional[int] = None
+    revoke_internet: Optional[bool] = None
 
 class DeviceBlockRequest(BaseModel):
     ip: str
@@ -40,6 +43,16 @@ class DeviceResponse(BaseModel):
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
 
+    # Hotspot plan & live internet policy
+    plan_id: Optional[str] = None
+    plan_name: Optional[str] = None
+    internet_status: str = "unauthorized"  # "active" | "expired" | "unauthorized" | "unlimited" | "curfew" | "blocked"
+    internet_label: str = "Login Required"
+    time_remaining_sec: Optional[int] = None
+    time_remaining_str: Optional[str] = None
+    session_expires_at: Optional[datetime] = None
+    is_internet_active: bool = False
+    policy_desc: str = ""
+
     class Config:
         from_attributes = True
-

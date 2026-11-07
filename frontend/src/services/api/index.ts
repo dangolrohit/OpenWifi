@@ -43,7 +43,7 @@ export const api = {
 
   devices: {
     list: () => apiClient<Device[]>('/api/v1/devices'),
-    update: (ip: string, updates: Partial<Device> & { schedule?: any }) =>
+    update: (ip: string, updates: Partial<Device> & { schedule?: any; assign_plan_id?: string; extend_minutes?: number; revoke_internet?: boolean }) =>
       apiClient<Device>(`/api/v1/devices/${ip}`, {
         method: 'PUT',
         body: JSON.stringify(updates),
@@ -52,6 +52,21 @@ export const api = {
       apiClient<Device>(`/api/v1/devices/${ip}/block`, {
         method: 'POST',
         body: JSON.stringify({ ip, blocked }),
+      }),
+    grantPlan: (ip: string, plan_id: string) =>
+      apiClient<Device>(`/api/v1/devices/${ip}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ip, assign_plan_id: plan_id }),
+      }),
+    extendTime: (ip: string, minutes: number = 30) =>
+      apiClient<Device>(`/api/v1/devices/${ip}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ip, extend_minutes: minutes }),
+      }),
+    revokeInternet: (ip: string) =>
+      apiClient<Device>(`/api/v1/devices/${ip}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ip, revoke_internet: true }),
       }),
   },
 
